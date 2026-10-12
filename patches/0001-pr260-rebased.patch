@@ -1,0 +1,2026 @@
+diff --git a/docs/recipes/exl3.md b/docs/recipes/exl3.md
+index 06029be9..707bd199 100644
+--- a/docs/recipes/exl3.md
++++ b/docs/recipes/exl3.md
+@@ -103,14 +103,36 @@ into tensor-core fragments and multiplies in fp32. Rows are independent by const
+ and of K splits depend only on (K, N) (`plan(k, n)`), every sum runs in a fixed order, and `mma.m16n8k16` keeps
+ its rows independent — which is the verify path's contract (`docs/recipes/cuda.md`).
+ 
++`linear_kernel` runs 16 rows a pass and decodes every tile again each pass, so from 17 rows (verify windows of several
++streams) the mid-M kernels take the call: each CTA holds 16 rows (17-48) or 32 (49-128) of one column block, and the
++CTAs of a block sit side by side in the grid so they read its words from L2 together. They keep `linear_kernel`'s K
++ranges, mma chain and fixed-order sums, so every output bit is the same at any row count. For 4- and 6-bit `mul1`
++layers `linear_wc.cuh` takes 17-128 rows first: a CTA holds 32 or 64 rows of one column block and one K split, each
++warp decodes its column tile once a CTA straight into mma fragments, and words and rows stream through a 4-stage
++`cp.async` ring; layers split over K with 32+ column blocks run every split in one CTA and add the split sums in
++registers in split order, with no Z buffer. The same chain and order again give `linear_kernel`'s bits.
++`TENSORFOLD_EXL3_WC=0` leaves 17-128 rows to the mid-M kernels, and `TENSORFOLD_EXL3_MIDM=0` keeps `linear_kernel`
++throughout.
++
+ ## Prompts
+ 
+-Prompt chunks take their own arithmetic, as the MLX 4-bit path's prompt matmul does (`cuda/exl3/prefill.py`): the
+-input rotation is decode's, W_q is decoded once a chunk into fp16, a fixed-tile fp16 GEMM with fp32 accumulation
+-multiplies it, and its epilogue rotates each 128-column block (the accumulator's bf16 high and low halves times
+-H) before `svh` and the bias. Tiles depend on the shape alone, so a row's bits never depend on its chunk and a
+-resumed prompt equals a fresh one; they differ from decode's, so the engines keep prompt ends and prefill a reply
+-again, as for the MLX checkpoints. A family's head, read one row a prompt, keeps the decode linear.
++Prompt chunks take their own arithmetic, as the MLX 4-bit path's prompt matmul does (`cuda/exl3/prefill.py`). A
++family whose prompt rows are bf16 can opt in to the folded path with `Workspace(fold=True)`, as the 27B does: each
++call decodes W'' = diag(suh) H W_q H / 128, both rotations folded into the weights and rounded once to bf16
++(`unpack_fold2`), and a fixed-tile bf16 GEMM with fp32 accumulation multiplies the raw rows by it before `svh` and
++the bias, so no `rot_in` pass runs. A 4-bit call of up to 48 rows with no W'' held (a short prompt, a short follow-up)
++runs `fdirect` instead, which rebuilds each W'' block exactly as `unpack_fold2` does and feeds it straight into the
++same mma chain: the same bits without writing W''. Otherwise the input rotation is decode's, W_q is decoded once a call into fp16, a
++fixed-tile fp16 GEMM with fp32 accumulation multiplies it, and its epilogue rotates each 128-column block (the
++accumulator's bf16 high and low halves times H) before `svh` and the bias. Either way tiles depend on the shape
++alone, so a row's bits never depend on its chunk and a resumed prompt equals a fresh one; they differ from decode's,
++so the engines keep prompt ends and prefill a reply again, as for the MLX checkpoints. A family's head, read one row
++a prompt, keeps the decode linear.
++
++Switches, read at import: `TENSORFOLD_EXL3_FOLD=0` puts every family on the W_q path; `TENSORFOLD_EXL3_FOLD_BF16=0`
++keeps W'' in fp16 and rounds the rows to fp16 in the GEMM; `TENSORFOLD_EXL3_FOLD2=0` decodes W'' with `unpack_fold`,
++the plain kernel `unpack_fold2` reproduces bit for bit; `TENSORFOLD_EXL3_FDIRECT_ROWS` sets the rows `fdirect` takes
++(0, off, by default; 48 turns it on for layers without a bias).
+ 
+ ## Numbers
+ 
+diff --git a/docs/recipes/qwen3.8-27b.md b/docs/recipes/qwen3.8-27b.md
+index 345eb6a7..3c0ba4a5 100644
+--- a/docs/recipes/qwen3.8-27b.md
++++ b/docs/recipes/qwen3.8-27b.md
+@@ -111,9 +111,14 @@ tensorfold serve qwen27b-exl3-3.00bpw --host 0.0.0.0 --port 8080
+ ```
+ 
+ Verify windows use the row-invariant EXL3 linear, so drafted replies equal `"draft": false` ones; prompts use the
+-EXL3 prompt path (W_q decoded once a chunk, a fixed-tile GEMM), whose bits do not depend on chunking, so the
+-engine keeps prompt ends as it does for the MLX checkpoint. The drafter reads the target's 6-bit head over its
+-draft vocabulary by slicing the head's 128-column strips as stored: its logits are the target's, bit for bit.
++EXL3 prompt path (the weights decoded once a call with both rotations folded in, a fixed-tile bf16 GEMM), whose
++bits do not depend on chunking, so the engine keeps prompt ends as it does for the MLX checkpoint. On one GPU a
++prompt of several chunks runs layer by layer (every chunk through layer l before layer l + 1), so each layer's
++weights are decoded once a prompt and one layer's are held at a time, with the same bits as chunk by chunk
++(`TENSORFOLD_PREFILL_LAYER_MAJOR=0` runs chunk by chunk). A prompt whose last message start is fewer than `MIN_GAP`
++rows from its end fills in one call that keeps the message start's state from inside it, rather than two
++(`TENSORFOLD_PREFILL_TAIL_MERGE=0` makes two). The drafter reads the target's 6-bit head over its draft vocabulary by
++slicing the head's 128-column strips as stored: its logits are the target's, bit for bit.
+ 
+ Measured on one DGX Spark (GB10) through `tensorfold serve`, the 3.00bpw pack against the MLX 4-bit checkpoint on
+ the same engine and box, the [public benchmark command](README.md#measurements), medians of 15 runs a cell:
+diff --git a/src/tensorfold/cuda/exl3/linear.cpp b/src/tensorfold/cuda/exl3/linear.cpp
+index 7930bdae..b0a43814 100644
+--- a/src/tensorfold/cuda/exl3/linear.cpp
++++ b/src/tensorfold/cuda/exl3/linear.cpp
+@@ -4,8 +4,12 @@
+ void exl3_rot_in_cuda(const at::Tensor&, const at::Tensor&, at::Tensor&);
+ void exl3_linear_cuda(const at::Tensor&, const at::Tensor&, int64_t, int64_t, const at::Tensor&,
+                       const c10::optional<at::Tensor>&, at::Tensor&, const c10::optional<at::Tensor>&, at::Tensor&,
+-                      int64_t, int64_t, int64_t, int64_t);
++                      int64_t, int64_t, int64_t, int64_t, int64_t);
+ void exl3_unpack_cuda(const at::Tensor&, at::Tensor&, int64_t, int64_t, int64_t, int64_t);
++void exl3_unpack_fold_cuda(const at::Tensor&, const at::Tensor&, at::Tensor&, int64_t, int64_t, int64_t, int64_t);
++void exl3_unpack_fold2_cuda(const at::Tensor&, const at::Tensor&, at::Tensor&, int64_t, int64_t, int64_t, int64_t);
++void exl3_fdirect_cuda(const at::Tensor&, const at::Tensor&, int64_t, int64_t, const at::Tensor&, const at::Tensor&,
++                       const c10::optional<at::Tensor>&, at::Tensor&, int64_t, int64_t);
+ 
+ static void check(const at::Tensor& x, at::ScalarType t, const char* name) {
+     TORCH_CHECK(x.is_cuda() && x.scalar_type() == t && x.is_contiguous(), name,
+@@ -32,9 +36,11 @@ void rot_in(const at::Tensor& x, const at::Tensor& suh, at::Tensor xh) {
+ }
+ 
+ // y [M, N] = (xh @ W_q) @ H * svh + bias; Z [SK, M, N] fp32 when SK > 1; counters int32 [8 * N / 128], left zero.
++// mode picks the kernel for 17-128 rows (0: linear_kernel; 6: the mid-M kernels; 7: linear_wc for 4- and 6-bit mul1,
++// else 6); every mode gives the same bits.
+ void linear(const at::Tensor& xh, const at::Tensor& T, int64_t stride_k, int64_t stride_nb, const at::Tensor& svh,
+             const c10::optional<at::Tensor>& bias, at::Tensor y, const c10::optional<at::Tensor>& Z,
+-            at::Tensor counters, int64_t K2, int64_t cb, int64_t SK, int64_t WK) {
++            at::Tensor counters, int64_t K2, int64_t cb, int64_t SK, int64_t WK, int64_t mode) {
+     check(xh, at::kHalf, "xh");
+     check_io(y, "y");
+     check(svh, at::kHalf, "svh");
+@@ -54,7 +60,7 @@ void linear(const at::Tensor& xh, const at::Tensor& T, int64_t stride_k, int64_t
+         TORCH_CHECK(Z->numel() >= SK * M * N, "Z too small");
+     }
+     c10::cuda::CUDAGuard guard(xh.device());
+-    exl3_linear_cuda(xh, T, stride_k, stride_nb, svh, bias, y, Z, counters, K2, cb, SK, WK);
++    exl3_linear_cuda(xh, T, stride_k, stride_nb, svh, bias, y, Z, counters, K2, cb, SK, WK, mode);
+ }
+ 
+ // W [K, N] fp16 = W_q, the trellis tiles decoded; tile (kt, nt) at kt * stride_k + (nt / 8) * stride_nb words.
+@@ -67,7 +73,54 @@ void unpack(const at::Tensor& T, at::Tensor W, int64_t stride_k, int64_t stride_
+     exl3_unpack_cuda(T, W, stride_k, stride_nb, K2, cb);
+ }
+ 
++static void check_fold(const at::Tensor& T, const at::Tensor& suh, const at::Tensor& W, int64_t K2) {
++    check(T, at::kInt, "T");
++    check(suh, at::kHalf, "suh");
++    TORCH_CHECK(W.is_cuda() && W.is_contiguous() &&
++                    (W.scalar_type() == at::kHalf || W.scalar_type() == at::kBFloat16),
++                "W: contiguous fp16 or bf16");
++    TORCH_CHECK(W.dim() == 2 && W.size(0) % 128 == 0 && W.size(1) % 128 == 0, "W must be [K, N], multiples of 128");
++    TORCH_CHECK(suh.numel() == W.size(0), "suh must have K elements");
++    TORCH_CHECK(T.numel() == W.numel() * K2 / 64, "T must hold K * N * bits / 32 words");
++}
++
++// W'' [K, N] fp16 or bf16 = diag(suh) Hk W_q Hn / 128: the prompt GEMM's weights with both rotations folded in.
++void unpack_fold(const at::Tensor& T, const at::Tensor& suh, at::Tensor W, int64_t stride_k, int64_t stride_nb,
++                 int64_t K2, int64_t cb) {
++    check_fold(T, suh, W, K2);
++    c10::cuda::CUDAGuard guard(T.device());
++    exl3_unpack_fold_cuda(T, suh, W, stride_k, stride_nb, K2, cb);
++}
++
++// The same W'', bit for bit, from unpack_fold2_kernel (the N side in registers, two blocks an SM).
++void unpack_fold2(const at::Tensor& T, const at::Tensor& suh, at::Tensor W, int64_t stride_k, int64_t stride_nb,
++                  int64_t K2, int64_t cb) {
++    check_fold(T, suh, W, K2);
++    c10::cuda::CUDAGuard guard(T.device());
++    exl3_unpack_fold2_cuda(T, suh, W, stride_k, stride_nb, K2, cb);
++}
++
++// out [M, N] bf16 = x @ W'' * svh + bias with W'' rebuilt in the kernel, never written: unpack_fold2 + _gemm_fold's bits.
++void fdirect(const at::Tensor& x, const at::Tensor& T, int64_t stride_k, int64_t stride_nb, const at::Tensor& suh,
++             const at::Tensor& svh, const c10::optional<at::Tensor>& bias, at::Tensor out, int64_t K2, int64_t cb) {
++    TORCH_CHECK(x.is_cuda() && x.scalar_type() == at::kBFloat16 && x.dim() == 2 && x.stride(1) == 1, "x: bf16 [M, K]");
++    TORCH_CHECK(x.stride(0) % 2 == 0 && reinterpret_cast<uintptr_t>(x.data_ptr()) % 4 == 0, "x alignment");
++    check(T, at::kInt, "T");
++    check(suh, at::kHalf, "suh");
++    check(svh, at::kHalf, "svh");
++    TORCH_CHECK(out.is_cuda() && out.scalar_type() == at::kBFloat16 && out.dim() == 2 && out.stride(1) == 1,
++                "out: bf16 [M, N], unit column stride");
++    TORCH_CHECK(out.size(0) == x.size(0) && suh.numel() == x.size(1) && svh.numel() == out.size(1), "shapes");
++    TORCH_CHECK(x.size(1) % 128 == 0 && out.size(1) % 128 == 0, "K and N must be multiples of 128");
++    if (bias) check(*bias, at::kHalf, "bias");
++    c10::cuda::CUDAGuard guard(x.device());
++    exl3_fdirect_cuda(x, T, stride_k, stride_nb, suh, svh, bias, out, K2, cb);
++}
++
+ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
++    m.def("fdirect", &fdirect);
++    m.def("unpack_fold", &unpack_fold);
++    m.def("unpack_fold2", &unpack_fold2);
+     m.def("rot_in", &rot_in);
+     m.def("linear", &linear);
+     m.def("unpack", &unpack);
+diff --git a/src/tensorfold/cuda/exl3/linear.cu b/src/tensorfold/cuda/exl3/linear.cu
+index a8368a40..060f15b9 100644
+--- a/src/tensorfold/cuda/exl3/linear.cu
++++ b/src/tensorfold/cuda/exl3/linear.cu
+@@ -6,6 +6,7 @@
+ #include <ATen/cuda/CUDAContext.h>
+ #include <c10/cuda/CUDAGuard.h>
+ #include <algorithm>
++#include <type_traits>
+ 
+ #include "decode.cuh"
+ 
+@@ -265,6 +266,168 @@ __global__ void __launch_bounds__(WK * 32) linear_kernel(
+     }
+ }
+ 
++// 17-128 rows (the mid-M kernels): each CTA takes one 16 P-row group of one column block (G = ceil(M / 16 P) CTAs a
++// block, side by side in the grid, so a block's CTAs read its words from L2 together) and decodes every k step's tiles
++// once for its P 16-row passes. The warps keep linear_kernel's K ranges, mma chain and warp-order sums, and the split
++// fold is the same: every output bit equals linear_kernel's at any row count.
++template <int K2, int CB, int WK, int P>
++__global__ void __launch_bounds__(WK * 32) linear_mpg_kernel(
++    const half* __restrict__ xh, const uint32_t* __restrict__ T, long long stride_k, long long stride_nb,
++    const half* __restrict__ svh, const half* __restrict__ bias, void* __restrict__ y, int y_dtype,
++    float* __restrict__ Z, int* __restrict__ counters, int M, int K, int N, int SK) {
++    constexpr int TW = tile_words<K2>();
++    constexpr int LW = lane_words<K2>();
++    extern __shared__ __align__(16) float red[];              // WK * RH * 128 floats
++    __shared__ int last;
++    const int RH = min(M, 8);                                 // rows of red a warp
++
++    const int G = (M + 16 * P - 1) / (16 * P), grp = blockIdx.x % G, nb = blockIdx.x / G, split = blockIdx.y, NB = gridDim.x / G;
++    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
++    const int g = lane >> 2, t = lane & 3;
++    const int per_warp = (K >> 4) / SK / WK;
++    const int kt0 = split * (per_warp * WK) + warp * per_warp;
++    const uint32_t* tiles = T + nb * stride_nb;
++    const int col0 = nb * 128;
++    bool prev = false;
++    if constexpr (step_shuffled<K2>()) {
++        int word, offset;
++        lane_start<K2>(lane, word, offset);
++        prev = word != lane / (8 / K2);
++    }
++
++    for (int mg = grp * 16 * P, pg = grp * P; mg < M && mg < (grp + 1) * 16 * P; mg += 16 * P, pg += P) {
++        float acc[P][8][2][4];
++#pragma unroll
++        for (int q = 0; q < P; ++q)
++#pragma unroll
++            for (int i = 0; i < 8; ++i)
++#pragma unroll
++                for (int h = 0; h < 2; ++h)
++#pragma unroll
++                    for (int c = 0; c < 4; ++c) acc[q][i][h][c] = 0.f;
++
++        // each pass's rows for the mma, clamped inside the buffer (rows past M are computed and dropped)
++        const half* x0[P];
++        const half* x1[P];
++#pragma unroll
++        for (int q = 0; q < P; ++q) {
++            const int mq = min(mg + 16 * q, M - 1), Rq = max(1, min(16, M - mq));
++            const int r0 = mq + (g < Rq ? g : Rq - 1), r1 = mq + (g + 8 < Rq ? g + 8 : Rq - 1);
++            x0[q] = xh + (size_t)r0 * K;
++            x1[q] = xh + (size_t)r1 * K;
++        }
++        const uint32_t* tile = tiles + (size_t)kt0 * stride_k;
++        // up to 6 bits the next k step's words are loaded while this one is decoded; 7 and 8 bits load per tile
++        constexpr bool PF = K2 <= 12;
++        constexpr int SR = step_regs<K2>();
++        uint32_t cur[PF ? SR : 1], nxt[PF ? SR : 1];
++        if constexpr (PF) load_step<K2>(tile, lane, cur);
++#pragma unroll 1
++        for (int i = 0; i < per_warp; ++i) {
++            const int kt = kt0 + i;
++            uint32_t a[P][4];
++#pragma unroll
++            for (int q = 0; q < P; ++q) {
++                a[q][0] = __ldg(reinterpret_cast<const uint32_t*>(x0[q] + kt * 16 + 2 * t));
++                a[q][1] = __ldg(reinterpret_cast<const uint32_t*>(x1[q] + kt * 16 + 2 * t));
++                a[q][2] = __ldg(reinterpret_cast<const uint32_t*>(x0[q] + kt * 16 + 2 * t + 8));
++                a[q][3] = __ldg(reinterpret_cast<const uint32_t*>(x1[q] + kt * 16 + 2 * t + 8));
++            }
++            if constexpr (PF) {
++                if (i + 1 < per_warp) load_step<K2>(tile + (size_t)(i + 1) * stride_k, lane, nxt);
++            }
++#pragma unroll
++            for (int j = 0; j < 8; ++j) {
++                uint32_t w[LW];
++                if constexpr (PF) step_lane_words<K2>(cur, j, lane, prev, w);
++                else ldg_lane_words<K2>(tile + (size_t)i * stride_k + j * TW, lane, w);
++                uint32_t b0[2], b1[2];
++                decode_lane<K2, CB>(w, lane, b0, b1);
++#pragma unroll
++                for (int q = 0; q < P; ++q) {
++                    mma16816(acc[q][j][0], a[q], b0);
++                    mma16816(acc[q][j][1], a[q], b1);
++                }
++            }
++            if constexpr (PF) {
++#pragma unroll
++                for (int q = 0; q < SR; ++q) cur[q] = nxt[q];
++            }
++        }
++
++#pragma unroll
++        for (int q = 0; q < P; ++q) {
++        const int m0 = mg + 16 * q, pass = pg + q;
++        if (m0 >= M) break;
++        const int R = min(16, M - m0);
++        // the warps' sums, added in warp order, rows 0-7 of the pass and then rows 8-15
++        for (int rlo = 0; rlo < R; rlo += 8) {
++            const int rn = min(R - rlo, 8);
++            __syncthreads();                         // red is reused by every half and pass
++            if (g < RH) {
++#pragma unroll
++                for (int i = 0; i < 8; ++i)
++#pragma unroll
++                    for (int h = 0; h < 2; ++h) {
++                        const int col = i * 16 + h * 8 + 2 * t;
++                        *reinterpret_cast<float2*>(red + (warp * RH + g) * 128 + col) =
++                            rlo ? make_float2(acc[q][i][h][2], acc[q][i][h][3]) : make_float2(acc[q][i][h][0], acc[q][i][h][1]);
++                    }
++            }
++            __syncthreads();
++
++            if (SK == 1) {
++                for (int r = warp; r < rn; r += WK) {
++                    float v[4];
++                    const float4 u = *reinterpret_cast<const float4*>(red + r * 128 + 4 * lane);
++                    v[0] = u.x; v[1] = u.y; v[2] = u.z; v[3] = u.w;
++#pragma unroll
++                    for (int w = 1; w < WK; ++w) {
++                        const float4 q = *reinterpret_cast<const float4*>(red + (w * RH + r) * 128 + 4 * lane);
++                        v[0] += q.x; v[1] += q.y; v[2] += q.z; v[3] += q.w;
++                    }
++                    finish(v, lane, svh, bias, col0 + 4 * lane);
++                    store4(y, y_dtype, (size_t)(m0 + rlo + r) * N + col0 + 4 * lane, v);
++                }
++            } else {
++                for (int idx = threadIdx.x; idx < rn * 32; idx += WK * 32) {
++                    const int r = idx >> 5, c = 4 * (idx & 31);
++                    float4 s = *reinterpret_cast<const float4*>(red + r * 128 + c);
++#pragma unroll
++                    for (int w = 1; w < WK; ++w) {
++                        const float4 q = *reinterpret_cast<const float4*>(red + (w * RH + r) * 128 + c);
++                        s.x += q.x; s.y += q.y; s.z += q.z; s.w += q.w;
++                    }
++                    *reinterpret_cast<float4*>(Z + ((size_t)split * M + m0 + rlo + r) * N + col0 + c) = s;
++                }
++            }
++        }
++        if (SK > 1) {
++            __threadfence();
++            __syncthreads();
++            if (threadIdx.x == 0) last = atomicAdd(counters + pass * NB + nb, 1) == SK - 1;
++            __syncthreads();
++            if (last) {
++                __threadfence();
++                for (int r = warp; r < R; r += WK) {
++                    const size_t at = ((size_t)m0 + r) * N + col0 + 4 * lane;
++                    float4 s = __ldcg(reinterpret_cast<const float4*>(Z + at));
++                    for (int q = 1; q < SK; ++q) {
++                        const float4 u = __ldcg(reinterpret_cast<const float4*>(Z + (size_t)q * M * N + at));
++                        s.x += u.x; s.y += u.y; s.z += u.z; s.w += u.w;
++                    }
++                    float v[4] = {s.x, s.y, s.z, s.w};
++                    finish(v, lane, svh, bias, col0 + 4 * lane);
++                    store4(y, y_dtype, (size_t)(m0 + r) * N + col0 + 4 * lane, v);
++                }
++                if (threadIdx.x == 0) counters[pass * NB + nb] = 0;   // every program of the block has arrived
++            }
++        }
++        }
++        __syncthreads();                             // red is reused in the next pass
++    }
++}
++
+ // W_q [K, N] fp16 from the trellis words (tile (kt, nt) at kt * stride_k + (nt / 8) * stride_nb): one warp per tile.
+ template <int K2, int CB>
+ __global__ void __launch_bounds__(32) unpack_kernel(const uint32_t* __restrict__ T, half* __restrict__ W, int N,
+@@ -282,6 +445,334 @@ __global__ void __launch_bounds__(32) unpack_kernel(const uint32_t* __restrict__
+     }
+ }
+ 
++// W'' [K, N] fp16 or bf16 = diag(suh) Hk W_q Hn / 128 for one 128 x 128 block (K block y, N block x): 8 warps decode the
++// block's 64 trellis tiles into fp32 shared memory, then fwht128 runs along every row (N side) and every column (K side,
++// times suh), and the block is stored with one rounding. A lane holds indices lane + 32 q (q = 0..3), a bit
++// permutation of fwht128's 4 lane + q: H is invariant under it, so loads and stores use the same map (conflict-free).
++template <int K2, int CB, typename OutT>
++__global__ void __launch_bounds__(256) unpack_fold_kernel(const uint32_t* __restrict__ T, const half* __restrict__ suh,
++                                                          OutT* __restrict__ W, int N, int64_t stride_k,
++                                                          int64_t stride_nb) {
++    extern __shared__ float fold_tile[];
++    constexpr int LD = 129;
++    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
++    const int bx = blockIdx.x, by = blockIdx.y, kt = by * 8 + warp;
++#pragma unroll 1
++    for (int j = 0; j < 8; ++j) {
++        uint32_t w[lane_words<K2>()];
++        ldg_lane_words<K2>(T + (int64_t)kt * stride_k + (int64_t)bx * stride_nb + j * tile_words<K2>(), lane, w);
++        uint32_t b[2][2];
++        decode_lane<K2, CB>(w, lane, b[0], b[1]);
++#pragma unroll
++        for (int jj = 0; jj < 8; ++jj) {
++            const uint32_t v = b[jj >> 2][(jj >> 1) & 1];
++            const unsigned short h = (jj & 1) ? (unsigned short)(v >> 16) : (unsigned short)(v & 0xffffu);
++            fold_tile[(warp * 16 + value_row(lane, jj)) * LD + j * 16 + value_col(lane, jj)] =
++                __half2float(__ushort_as_half(h));
++        }
++    }
++    __syncthreads();
++#pragma unroll 1
++    for (int r = warp * 16; r < warp * 16 + 16; ++r) {           // N side: W_q Hn
++        float v[4];
++#pragma unroll
++        for (int q = 0; q < 4; ++q) v[q] = fold_tile[r * LD + lane + 32 * q];
++        fwht128(v, lane);
++#pragma unroll
++        for (int q = 0; q < 4; ++q) fold_tile[r * LD + lane + 32 * q] = v[q];
++    }
++    __syncthreads();
++#pragma unroll 1
++    for (int c = warp * 16; c < warp * 16 + 16; ++c) {           // K side: diag(suh) Hk, and both 1 / sqrt(128)
++        float v[4];
++#pragma unroll
++        for (int q = 0; q < 4; ++q) v[q] = fold_tile[(lane + 32 * q) * LD + c];
++        fwht128(v, lane);
++#pragma unroll
++        for (int q = 0; q < 4; ++q)
++            fold_tile[(lane + 32 * q) * LD + c] =
++                v[q] * (HAD_SCALE * HAD_SCALE) * __half2float(suh[by * 128 + lane + 32 * q]);
++    }
++    __syncthreads();
++#pragma unroll 1
++    for (int r = warp * 16; r < warp * 16 + 16; ++r) {
++        OutT* dst = W + (int64_t)(by * 128 + r) * N + bx * 128;
++#pragma unroll
++        for (int q = 0; q < 4; ++q) {
++            const float f = fold_tile[r * LD + lane + 32 * q];
++            if constexpr (sizeof(OutT) == 2 && std::is_same<OutT, half>::value) dst[lane + 32 * q] = __float2half_rn(f);
++            else dst[lane + 32 * q] = __float2bfloat16_rn(f);
++        }
++    }
++}
++
++// unpack_fold2_kernel: the same W'' = diag(suh) Hk W_q Hn / 128 as unpack_fold_kernel, bit for bit, faster. The N-side
++// fwht runs in registers on the decoded fragments (each warp holds 16 whole rows), only the K side goes through shared
++// memory, in two 64-column halves (32 KB fp32 + 16 KB bf16 staging, XOR-swizzled, conflict-free), so 2 blocks fit an SM
++// and the 8 tiles' words of a warp are all in flight at once; the output leaves in 16-byte row stores.
++// Same values in the same butterfly order as fwht128 on its lane + 32 q map (N side bits c5 c6 c0..c4, K side r5 r6
++// r0..r4; x0 + x1 / x0 - x1 at every stage), same scale and suh products, one rounding: identical bits.
++template <int K2, int CB, typename OutT>
++__global__ void __launch_bounds__(256, 2) unpack_fold2_kernel(const uint32_t* __restrict__ T, const half* __restrict__ suh,
++                                                              OutT* __restrict__ W, int N, int64_t stride_k,
++                                                              int64_t stride_nb) {
++    __shared__ float s32[128 * 64];
++    __shared__ uint32_t s16[128 * 32];
++    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
++    const int bx = blockIdx.x, by = blockIdx.y, kt = by * 8 + warp;
++    float v[8][8];                       // [tile j][value jj]: row 16 warp + value_row(lane, jj), column 16 j + value_col
++    {
++        uint32_t w[8][lane_words<K2>()];
++#pragma unroll
++        for (int j = 0; j < 8; ++j)
++            ldg_lane_words<K2>(T + (int64_t)kt * stride_k + (int64_t)bx * stride_nb + j * tile_words<K2>(), lane, w[j]);
++#pragma unroll
++        for (int j = 0; j < 8; ++j) {
++            uint32_t b[2][2];
++            decode_lane<K2, CB>(w[j], lane, b[0], b[1]);
++#pragma unroll
++            for (int jj = 0; jj < 8; ++jj) {
++                const uint32_t u = b[jj >> 2][(jj >> 1) & 1];
++                const unsigned short h = (jj & 1) ? (unsigned short)(u >> 16) : (unsigned short)(u & 0xffffu);
++                v[j][jj] = __half2float(__ushort_as_half(h));
++            }
++        }
++    }
++    // N side. Column bits: c0..c2 = lane bits 2..4, c3 = jj bit 2, c4..c6 = j bits 0..2.
++#define BF(a, b) { const float x0 = (a), x1 = (b); (a) = x0 + x1; (b) = x0 - x1; }
++#pragma unroll
++    for (int jj = 0; jj < 8; ++jj) {
++#pragma unroll
++        for (int j = 0; j < 8; ++j) if (!(j & 2)) BF(v[j][jj], v[j | 2][jj]);        // c5
++#pragma unroll
++        for (int j = 0; j < 4; ++j) BF(v[j][jj], v[j | 4][jj]);                      // c6
++#pragma unroll
++        for (int m = 4; m <= 16; m <<= 1)                                            // c0, c1, c2
++#pragma unroll
++            for (int j = 0; j < 8; ++j) {
++                const float o = __shfl_xor_sync(0xffffffffu, v[j][jj], m);
++                v[j][jj] = (lane & m) ? o - v[j][jj] : v[j][jj] + o;
++            }
++    }
++#pragma unroll
++    for (int j = 0; j < 8; ++j)
++#pragma unroll
++        for (int jj = 0; jj < 4; ++jj) BF(v[j][jj], v[j][jj | 4]);                   // c3
++#pragma unroll
++    for (int j = 0; j < 8; j += 2)
++#pragma unroll
++        for (int jj = 0; jj < 8; ++jj) BF(v[j][jj], v[j | 1][jj]);                   // c4
++    // K side per 64-column half (c6 = half). s32 [row][col ^ 8 g(row)], g = (r1 ^ r3) + 2 (r2 ^ r4).
++    const int c = lane & 7, r3 = (lane >> 3) & 1, r4 = lane >> 4;
++#pragma unroll
++    for (int hf = 0; hf < 2; ++hf) {
++#pragma unroll
++        for (int t = 0; t < 4; ++t)
++#pragma unroll
++            for (int jj = 0; jj < 8; ++jj) {
++                const int row = warp * 16 + value_row(lane, jj), col = 16 * t + value_col(lane, jj);
++                const int g = (((row >> 1) ^ (row >> 3)) & 1) | ((((row >> 2) ^ (row >> 4)) & 1) << 1);
++                s32[row * 64 + (col ^ (8 * g))] = v[4 * hf + t][jj];
++            }
++        __syncthreads();
++        float u[32];                     // i bits: r5 r6 r0 r1 r2; column 8 warp + c, row bits r3 r4 from the lane
++        const int col = warp * 8 + c;
++#pragma unroll
++        for (int i = 0; i < 32; ++i) {
++            const int row = ((i >> 2) & 7) + 8 * r3 + 16 * r4 + 32 * (i & 1) + 64 * ((i >> 1) & 1);
++            const int g = (((row >> 1) ^ (row >> 3)) & 1) | ((((row >> 2) ^ (row >> 4)) & 1) << 1);
++            u[i] = s32[row * 64 + (col ^ (8 * g))];
++        }
++#pragma unroll
++        for (int bit = 1; bit < 32; bit <<= 1)                                       // r5, r6, r0, r1, r2
++#pragma unroll
++            for (int i = 0; i < 32; ++i) if (!(i & bit)) BF(u[i], u[i | bit]);
++#pragma unroll
++        for (int m = 8; m <= 16; m <<= 1)                                            // r3, r4
++#pragma unroll
++            for (int i = 0; i < 32; ++i) {
++                const float o = __shfl_xor_sync(0xffffffffu, u[i], m);
++                u[i] = (lane & m) ? o - u[i] : u[i] + o;
++            }
++        unsigned short* s16h = reinterpret_cast<unsigned short*>(s16);
++#pragma unroll
++        for (int i = 0; i < 32; ++i) {
++            const int row = ((i >> 2) & 7) + 8 * r3 + 16 * r4 + 32 * (i & 1) + 64 * ((i >> 1) & 1);
++            const float f = u[i] * (HAD_SCALE * HAD_SCALE) * __half2float(suh[by * 128 + row]);
++            unsigned short h;
++            if constexpr (std::is_same<OutT, half>::value) h = __half_as_ushort(__float2half_rn(f));
++            else h = __bfloat16_as_ushort(__float2bfloat16_rn(f));
++            const int word = (col >> 1) ^ (4 * (r3 + 2 * r4));                       // g'(row) = r3 + 2 r4
++            s16h[row * 64 + 2 * word + (col & 1)] = h;
++        }
++        __syncthreads();
++#pragma unroll
++        for (int it = 0; it < 4; ++it) {
++            const int id = it * 256 + threadIdx.x, row = id >> 3, vec = id & 7;
++            const uint4 q = *reinterpret_cast<const uint4*>(s16 + row * 32 + 4 * (vec ^ ((row >> 3) & 3)));
++            *reinterpret_cast<uint4*>(W + (int64_t)(by * 128 + row) * N + bx * 128 + 64 * hf + 8 * vec) = q;
++        }
++    }
++#undef BF
++}
++
++// fdirect_kernel: out [M, N] bf16 = (x [M, K] bf16 @ W'') * svh + bias for M <= 16 MT rows, W'' never written: each
++// program owns one 128-column block and walks K in 128-row blocks in order, rebuilding each W'' block exactly as
++// unpack_fold2_kernel does (same decode, same butterflies, same rounding, the same 64-column halves in s16), and
++// feeds it straight into one mma.m16n8k16 bf16 chain over K in k16 order from zero, the chain tl.dot runs in
++// _gemm_fold (a plain chain reproduced its bits on every 27B shape at 1-128 rows), so the output equals unpack_fold2 +
++// _gemm_fold bit for bit.
++template <int K2, int CB, int MT>
++__global__ void __launch_bounds__(256, 1) fdirect_kernel(const __nv_bfloat16* __restrict__ x, int ldx,
++                                                         const uint32_t* __restrict__ T, const half* __restrict__ suh,
++                                                         const half* __restrict__ svh, const half* __restrict__ bias,
++                                                         __nv_bfloat16* __restrict__ out, int ldo, int M, int K, int N,
++                                                         int64_t stride_k, int64_t stride_nb) {
++    __shared__ float s32[128 * 64];
++    __shared__ uint32_t s16[128 * 32];
++    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
++    const int bx = blockIdx.x;
++    const int g8 = lane >> 2, t4 = lane & 3;
++    const int c = lane & 7, r3 = (lane >> 3) & 1, r4 = lane >> 4;
++    const unsigned short* s16h = reinterpret_cast<const unsigned short*>(s16);
++    float acc[2][MT][4];
++#pragma unroll
++    for (int hf = 0; hf < 2; ++hf)
++#pragma unroll
++        for (int mt = 0; mt < MT; ++mt)
++#pragma unroll
++            for (int i = 0; i < 4; ++i) acc[hf][mt][i] = 0.f;
++#define BF(a, b) { const float x0 = (a), x1 = (b); (a) = x0 + x1; (b) = x0 - x1; }
++    uint32_t w[8][lane_words<K2>()];             // this warp's words of the next block, in flight during this one
++#pragma unroll
++    for (int j = 0; j < 8; ++j)
++        ldg_lane_words<K2>(T + (int64_t)warp * stride_k + (int64_t)bx * stride_nb + j * tile_words<K2>(), lane, w[j]);
++#pragma unroll 1
++    for (int by = 0; by < K / 128; ++by) {
++        float v[8][8];
++#pragma unroll
++        for (int j = 0; j < 8; ++j) {
++            uint32_t b[2][2];
++            decode_lane<K2, CB>(w[j], lane, b[0], b[1]);
++#pragma unroll
++            for (int jj = 0; jj < 8; ++jj) {
++                const uint32_t u = b[jj >> 2][(jj >> 1) & 1];
++                const unsigned short h = (jj & 1) ? (unsigned short)(u >> 16) : (unsigned short)(u & 0xffffu);
++                v[j][jj] = __half2float(__ushort_as_half(h));
++            }
++        }
++        if (by + 1 < K / 128) {
++            const int kt = (by + 1) * 8 + warp;
++#pragma unroll
++            for (int j = 0; j < 8; ++j)
++                ldg_lane_words<K2>(T + (int64_t)kt * stride_k + (int64_t)bx * stride_nb + j * tile_words<K2>(), lane,
++                                   w[j]);
++        }
++#pragma unroll
++        for (int jj = 0; jj < 8; ++jj) {
++#pragma unroll
++            for (int j = 0; j < 8; ++j) if (!(j & 2)) BF(v[j][jj], v[j | 2][jj]);
++#pragma unroll
++            for (int j = 0; j < 4; ++j) BF(v[j][jj], v[j | 4][jj]);
++#pragma unroll
++            for (int m = 4; m <= 16; m <<= 1)
++#pragma unroll
++                for (int j = 0; j < 8; ++j) {
++                    const float o = __shfl_xor_sync(0xffffffffu, v[j][jj], m);
++                    v[j][jj] = (lane & m) ? o - v[j][jj] : v[j][jj] + o;
++                }
++        }
++#pragma unroll
++        for (int j = 0; j < 8; ++j)
++#pragma unroll
++            for (int jj = 0; jj < 4; ++jj) BF(v[j][jj], v[j][jj | 4]);
++#pragma unroll
++        for (int j = 0; j < 8; j += 2)
++#pragma unroll
++            for (int jj = 0; jj < 8; ++jj) BF(v[j][jj], v[j | 1][jj]);
++#pragma unroll
++        for (int hf = 0; hf < 2; ++hf) {
++#pragma unroll
++            for (int t = 0; t < 4; ++t)
++#pragma unroll
++                for (int jj = 0; jj < 8; ++jj) {
++                    const int row = warp * 16 + value_row(lane, jj), col = 16 * t + value_col(lane, jj);
++                    const int g = (((row >> 1) ^ (row >> 3)) & 1) | ((((row >> 2) ^ (row >> 4)) & 1) << 1);
++                    s32[row * 64 + (col ^ (8 * g))] = v[4 * hf + t][jj];
++                }
++            __syncthreads();
++            {
++                float u[32];
++                const int col = warp * 8 + c;
++#pragma unroll
++                for (int i = 0; i < 32; ++i) {
++                    const int row = ((i >> 2) & 7) + 8 * r3 + 16 * r4 + 32 * (i & 1) + 64 * ((i >> 1) & 1);
++                    const int g = (((row >> 1) ^ (row >> 3)) & 1) | ((((row >> 2) ^ (row >> 4)) & 1) << 1);
++                    u[i] = s32[row * 64 + (col ^ (8 * g))];
++                }
++#pragma unroll
++                for (int bit = 1; bit < 32; bit <<= 1)
++#pragma unroll
++                    for (int i = 0; i < 32; ++i) if (!(i & bit)) BF(u[i], u[i | bit]);
++#pragma unroll
++                for (int m = 8; m <= 16; m <<= 1)
++#pragma unroll
++                    for (int i = 0; i < 32; ++i) {
++                        const float o = __shfl_xor_sync(0xffffffffu, u[i], m);
++                        u[i] = (lane & m) ? o - u[i] : u[i] + o;
++                    }
++                unsigned short* w16 = reinterpret_cast<unsigned short*>(s16);
++#pragma unroll
++                for (int i = 0; i < 32; ++i) {
++                    const int row = ((i >> 2) & 7) + 8 * r3 + 16 * r4 + 32 * (i & 1) + 64 * ((i >> 1) & 1);
++                    const float f = u[i] * (HAD_SCALE * HAD_SCALE) * __half2float(suh[by * 128 + row]);
++                    const int word = (col >> 1) ^ (4 * (r3 + 2 * r4));
++                    w16[row * 64 + 2 * word + (col & 1)] = __bfloat16_as_ushort(__float2bfloat16_rn(f));
++                }
++            }
++            __syncthreads();
++            // this half's W'' block [128 k][64 n] is in s16: the warp's n8 tile (columns 8 warp .. 8 warp + 7)
++            const int ncol = 8 * warp + g8;
++#pragma unroll
++            for (int kk = 0; kk < 8; ++kk) {
++                const int k0 = 16 * kk + 2 * t4;
++                auto wv = [&](int row) -> uint32_t {
++                    const int word = (ncol >> 1) ^ (4 * ((row >> 3) & 3));
++                    return s16h[row * 64 + 2 * word + (ncol & 1)];
++                };
++                uint32_t b[2] = {wv(k0) | (wv(k0 + 1) << 16), wv(k0 + 8) | (wv(k0 + 9) << 16)};
++                const int kg = by * 128 + k0;
++#pragma unroll
++                for (int mt = 0; mt < MT; ++mt) {
++                    const int ra = mt * 16 + g8, rb = ra + 8;
++                    uint32_t a[4];
++                    a[0] = ra < M ? __ldg(reinterpret_cast<const uint32_t*>(x + (int64_t)ra * ldx + kg)) : 0u;
++                    a[1] = rb < M ? __ldg(reinterpret_cast<const uint32_t*>(x + (int64_t)rb * ldx + kg)) : 0u;
++                    a[2] = ra < M ? __ldg(reinterpret_cast<const uint32_t*>(x + (int64_t)ra * ldx + kg + 8)) : 0u;
++                    a[3] = rb < M ? __ldg(reinterpret_cast<const uint32_t*>(x + (int64_t)rb * ldx + kg + 8)) : 0u;
++                    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, "
++                                 "{%8,%9}, {%0,%1,%2,%3};\n"
++                                 : "+f"(acc[hf][mt][0]), "+f"(acc[hf][mt][1]), "+f"(acc[hf][mt][2]), "+f"(acc[hf][mt][3])
++                                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
++                }
++            }
++        }
++    }
++#undef BF
++#pragma unroll
++    for (int hf = 0; hf < 2; ++hf)
++#pragma unroll
++        for (int mt = 0; mt < MT; ++mt)
++#pragma unroll
++            for (int i = 0; i < 4; ++i) {
++                const int r = mt * 16 + g8 + 8 * (i >> 1), col = bx * 128 + 64 * hf + 8 * warp + 2 * t4 + (i & 1);
++                if (r >= M) continue;
++                float y = __fmul_rn(acc[hf][mt][i], __half2float(svh[col]));
++                if (bias) y = __fadd_rn(y, __half2float(bias[col]));
++                out[(int64_t)r * ldo + col] = __float2bfloat16_rn(y);
++            }
++}
++
+ int dtype_of(const at::Tensor& t) {
+     return t.scalar_type() == at::kFloat ? F32 : t.scalar_type() == at::kBFloat16 ? BF16 : F16;
+ }
+@@ -300,10 +791,12 @@ void exl3_rot_in_cuda(const at::Tensor& x, const at::Tensor& suh, at::Tensor& xh
+     C10_CUDA_KERNEL_LAUNCH_CHECK();
+ }
+ 
++#include "linear_wc.cuh"
++
+ void exl3_linear_cuda(const at::Tensor& xh, const at::Tensor& T, int64_t stride_k, int64_t stride_nb,
+                       const at::Tensor& svh, const c10::optional<at::Tensor>& bias, at::Tensor& y,
+                       const c10::optional<at::Tensor>& Z, at::Tensor& counters, int64_t K2, int64_t cb, int64_t SK,
+-                      int64_t WK) {
++                      int64_t WK, int64_t mode) {
+     const int M = (int)xh.size(0), K = (int)xh.size(1), N = (int)y.size(1);
+     TORCH_CHECK(WK == 2 || WK == 4 || WK == 8, "WK must be 2, 4 or 8");
+     TORCH_CHECK((K / 16) % (SK * WK) == 0, "K / 16 must split evenly over SK * WK warps");
+@@ -312,11 +805,25 @@ void exl3_linear_cuda(const at::Tensor& xh, const at::Tensor& T, int64_t stride_
+     const half* bptr = bias ? reinterpret_cast<const half*>(bias->data_ptr()) : nullptr;
+     float* zptr = Z ? Z->data_ptr<float>() : nullptr;
+     TORCH_CHECK(SK == 1 || zptr, "Z is needed with more than one split");
++    constexpr int MIDM = 6, WC = 7;    // mode: 0 linear_kernel at every row count, 6 the mid-M kernels, 7 linear_wc
++    if (mode >= WC && cb == CB_MUL1 &&
++        (K2 == 8 ? dispatch_wc<8>(xh, T, stride_k, stride_nb, svh, bptr, y, zptr, counters, M, K, N, (int)SK, (int)WK)
++                 : K2 == 12 &&
++                       dispatch_wc<12>(xh, T, stride_k, stride_nb, svh, bptr, y, zptr, counters, M, K, N, (int)SK, (int)WK)))
++        return;                                   // else the mid-M kernels take it
+ #define TF_LAUNCH(K2_, CB_)                                                                                        \
+     if (K2 == K2_ && cb == CB_) {                                                                               \
+         auto kernel = WK == 2 ? linear_kernel<K2_, CB_, 2>                                                      \
+                               : WK == 4 ? linear_kernel<K2_, CB_, 4> : linear_kernel<K2_, CB_, 8>;              \
+         const int smem = (int)(WK * std::min(M, 8) * 128 * sizeof(float));                                \
++        if (mode >= MIDM && M > 16) {          /* 17-48 rows: 16-row groups; 49-128: 32-row groups */          \
++            const bool p2 = M > 48;                                                                              \
++            kernel = p2 ? (WK == 2 ? linear_mpg_kernel<K2_, CB_, 2, 2>                                           \
++                                   : WK == 4 ? linear_mpg_kernel<K2_, CB_, 4, 2> : linear_mpg_kernel<K2_, CB_, 8, 2>) \
++                        : (WK == 2 ? linear_mpg_kernel<K2_, CB_, 2, 1>                                           \
++                                   : WK == 4 ? linear_mpg_kernel<K2_, CB_, 4, 1> : linear_mpg_kernel<K2_, CB_, 8, 1>); \
++            grid.x = (unsigned)((N / 128) * ((M + (p2 ? 31 : 15)) / (p2 ? 32 : 16)));                           \
++        }                                                                                                        \
+         if (smem > 48 * 1024) cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem); \
+         kernel<<<grid, (unsigned)(WK * 32), smem, stream>>>(                                              \
+             reinterpret_cast<const half*>(xh.data_ptr()), reinterpret_cast<const uint32_t*>(T.data_ptr()),      \
+@@ -347,3 +854,84 @@ void exl3_unpack_cuda(const at::Tensor& T, at::Tensor& W, int64_t stride_k, int6
+ #undef TF_LAUNCH
+     TORCH_CHECK(false, "unsupported EXL3 width/codebook: K2=", K2, " codebook=", cb);
+ }
++
++void exl3_unpack_fold_cuda(const at::Tensor& T, const at::Tensor& suh, at::Tensor& W, int64_t stride_k,
++                           int64_t stride_nb, int64_t K2, int64_t cb) {
++    const int K = (int)W.size(0), N = (int)W.size(1);
++    dim3 grid((unsigned)(N / 128), (unsigned)(K / 128));
++    auto stream = at::cuda::getCurrentCUDAStream();
++    constexpr int SMEM = 128 * 129 * 4;
++#define TF_LAUNCH(K2_, CB_)                                                                                         \
++    if (K2 == K2_ && cb == CB_) {                                                                                \
++        if (W.scalar_type() == at::kBFloat16) {                                                                  \
++            auto kernel = unpack_fold_kernel<K2_, CB_, __nv_bfloat16>;                                           \
++            cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM);                     \
++            kernel<<<grid, 256, SMEM, stream>>>(reinterpret_cast<const uint32_t*>(T.data_ptr()),                 \
++                                                reinterpret_cast<const half*>(suh.data_ptr()),                   \
++                                                reinterpret_cast<__nv_bfloat16*>(W.data_ptr()), N, stride_k,     \
++                                                stride_nb);                                                      \
++        } else {                                                                                                 \
++            auto kernel = unpack_fold_kernel<K2_, CB_, half>;                                                    \
++            cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, SMEM);                     \
++            kernel<<<grid, 256, SMEM, stream>>>(reinterpret_cast<const uint32_t*>(T.data_ptr()),                 \
++                                                reinterpret_cast<const half*>(suh.data_ptr()),                   \
++                                                reinterpret_cast<half*>(W.data_ptr()), N, stride_k, stride_nb);  \
++        }                                                                                                        \
++        C10_CUDA_KERNEL_LAUNCH_CHECK();                                                                          \
++        return;                                                                                                  \
++    }
++    TF_EXL3_ALL(TF_LAUNCH)
++#undef TF_LAUNCH
++    TORCH_CHECK(false, "unsupported EXL3 width/codebook: K2=", K2, " codebook=", cb);
++}
++
++void exl3_unpack_fold2_cuda(const at::Tensor& T, const at::Tensor& suh, at::Tensor& W, int64_t stride_k,
++                            int64_t stride_nb, int64_t K2, int64_t cb) {
++    const int K = (int)W.size(0), N = (int)W.size(1);
++    dim3 grid((unsigned)(N / 128), (unsigned)(K / 128));
++    auto stream = at::cuda::getCurrentCUDAStream();
++#define TF_LAUNCH(K2_, CB_)                                                                                         \
++    if (K2 == K2_ && cb == CB_) {                                                                                \
++        if (W.scalar_type() == at::kBFloat16)                                                                    \
++            unpack_fold2_kernel<K2_, CB_, __nv_bfloat16><<<grid, 256, 0, stream>>>(                              \
++                reinterpret_cast<const uint32_t*>(T.data_ptr()), reinterpret_cast<const half*>(suh.data_ptr()),  \
++                reinterpret_cast<__nv_bfloat16*>(W.data_ptr()), N, stride_k, stride_nb);                         \
++        else                                                                                                     \
++            unpack_fold2_kernel<K2_, CB_, half><<<grid, 256, 0, stream>>>(                                       \
++                reinterpret_cast<const uint32_t*>(T.data_ptr()), reinterpret_cast<const half*>(suh.data_ptr()),  \
++                reinterpret_cast<half*>(W.data_ptr()), N, stride_k, stride_nb);                                  \
++        C10_CUDA_KERNEL_LAUNCH_CHECK();                                                                          \
++        return;                                                                                                  \
++    }
++    TF_EXL3_ALL(TF_LAUNCH)
++#undef TF_LAUNCH
++    TORCH_CHECK(false, "unsupported EXL3 width/codebook: K2=", K2, " codebook=", cb);
++}
++
++void exl3_fdirect_cuda(const at::Tensor& x, const at::Tensor& T, int64_t stride_k, int64_t stride_nb,
++                       const at::Tensor& suh, const at::Tensor& svh, const c10::optional<at::Tensor>& bias,
++                       at::Tensor& out, int64_t K2, int64_t cb) {
++    const int M = (int)x.size(0), K = (int)x.size(1), N = (int)out.size(1);
++    auto stream = at::cuda::getCurrentCUDAStream();
++    const half* bptr = bias ? reinterpret_cast<const half*>(bias->data_ptr()) : nullptr;
++    TORCH_CHECK(K2 == 8, "fdirect: 4-bit tiles only");
++    for (int r0 = 0; r0 < M; r0 += 128) {            // rows are independent: 128-row slices keep their bits
++        const int m = std::min(128, M - r0);
++        const auto* xp = reinterpret_cast<const __nv_bfloat16*>(x.data_ptr()) + (int64_t)r0 * x.stride(0);
++        auto* op = reinterpret_cast<__nv_bfloat16*>(out.data_ptr()) + (int64_t)r0 * out.stride(0);
++#define TF_FD(CB_, MT_)                                                                                         \
++        if (cb == CB_ && (m + 15) / 16 <= MT_) {                                                                \
++            fdirect_kernel<8, CB_, MT_><<<dim3((unsigned)(N / 128)), 256, 0, stream>>>(                         \
++                xp, (int)x.stride(0), reinterpret_cast<const uint32_t*>(T.data_ptr()),                          \
++                reinterpret_cast<const half*>(suh.data_ptr()), reinterpret_cast<const half*>(svh.data_ptr()),  \
++                bptr, op, (int)out.stride(0), m, K, N, stride_k, stride_nb);                                    \
++            C10_CUDA_KERNEL_LAUNCH_CHECK();                                                                     \
++            continue;                                                                                           \
++        }
++#define TF_FD_CB(CB_) TF_FD(CB_, 1) TF_FD(CB_, 2) TF_FD(CB_, 3) TF_FD(CB_, 4) TF_FD(CB_, 8)
++        TF_FD_CB(0) TF_FD_CB(1) TF_FD_CB(2)
++#undef TF_FD_CB
++#undef TF_FD
++        TORCH_CHECK(false, "fdirect: unsupported codebook ", cb);
++    }
++}
+diff --git a/src/tensorfold/cuda/exl3/linear.py b/src/tensorfold/cuda/exl3/linear.py
+index 0a189e19..73be3776 100644
+--- a/src/tensorfold/cuda/exl3/linear.py
++++ b/src/tensorfold/cuda/exl3/linear.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++import os
+ from dataclasses import dataclass
+ from functools import lru_cache
+ from pathlib import Path
+@@ -11,6 +12,11 @@ import torch
+ from . import format as fmt
+ 
+ CODEBOOK_IDS = {"3inst": 0, "mcg": 1, "mul1": 2}
++# The kernel for 17-128 rows, all with linear_kernel's bits: 7 linear_wc (linear_wc.cuh) for 4- and 6-bit mul1 layers,
++# else 6 the mid-M kernels (each k step's tiles decoded once for 16 or 32 rows). TENSORFOLD_EXL3_WC=0 stops at 6,
++# TENSORFOLD_EXL3_MIDM=0 keeps linear_kernel at every row count.
++MODE = (0 if os.environ.get("TENSORFOLD_EXL3_MIDM", "1") == "0"
++        else 6 if os.environ.get("TENSORFOLD_EXL3_WC", "1") == "0" else 7)
+ 
+ 
+ @lru_cache(maxsize=1)
+@@ -181,7 +187,7 @@ class Exl3Linear:
+         ext = _ext()
+         ext.rot_in(x, self.suh, xh)
+         ext.linear(xh, self.words, sk_stride, nb_stride, self.svh, self.bias, out, z if sk > 1 else None,
+-                   self.counters, self.k2, CODEBOOK_IDS[self.codebook], sk, wk)
++                   self.counters, self.k2, CODEBOOK_IDS[self.codebook], sk, wk, MODE)
+         return out
+ 
+     def unpack(self, out: torch.Tensor | None = None) -> torch.Tensor:
+diff --git a/src/tensorfold/cuda/exl3/linear_wc.cuh b/src/tensorfold/cuda/exl3/linear_wc.cuh
+new file mode 100644
+index 00000000..3c8f7e33
+--- /dev/null
++++ b/src/tensorfold/cuda/exl3/linear_wc.cuh
+@@ -0,0 +1,247 @@
++// Verify-sized EXL3 linear for 17-128 rows (its tiling after MLX's 4-bit qmm): one CTA holds a
++// 128-column block, one K split and RG = 16 MT rows. Warp w (8 warps) owns column tile w for all RG rows and decodes
++// each of its tiles once a CTA straight into its mma B fragments. The split's trellis words and the CTA's fp16 rows
++// stream through an NS-stage cp.async ring of KS k steps (KS divides the K range, so a stage never straddles one);
++// A by ldmatrix from XOR-swizzled rows. Per row the arithmetic is linear_kernel's: the split's WK K ranges (range r =
++// linear_kernel's warp r) each from zero accumulators with the same mma chain in k order, added in range order (tot = s0,
++// tot += s1, ...), then the split sums folded through Z in split order: every output bit equals linear_kernel's
++// at any row count (rows past M are computed on clamped copies and dropped).
++__device__ __forceinline__ void wc_cp16(void* dst, const void* src) {
++    asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"((uint32_t)__cvta_generic_to_shared(dst)), "l"(src));
++}
++__device__ __forceinline__ void wc_commit() { asm volatile("cp.async.commit_group;\n" ::); }
++template <int N_>
++__device__ __forceinline__ void wc_wait() { asm volatile("cp.async.wait_group %0;\n" ::"n"(N_)); }
++__device__ __forceinline__ void wc_ldsm4(uint32_t (&a)[4], const void* p) {
++    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
++                 : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3])
++                 : "r"((uint32_t)__cvta_generic_to_shared(p)));
++}
++
++template <int K2, int RG, int KS, int NS>
++struct WcLayout {
++    static constexpr int RAW = 8 * tile_words<K2>();          // words of one k step's 8 tiles
++    static constexpr int RAW_STAGE = KS * RAW * 4;
++    static constexpr int A_STAGE = KS * RG * 32;               // the CTA's rows, 16 fp16 each a k step
++    static constexpr int STAGE = RAW_STAGE + A_STAGE;
++    static constexpr int PIPE = NS * STAGE;
++    static constexpr int RED = RG * 128 * 4;                   // the finished sums (reuses the ring)
++    static constexpr int SMEM = PIPE > RED ? PIPE : RED;
++};
++
++template <int K2, int CB, int MT, int KS, int NS, bool FOLD>
++__global__ void __launch_bounds__(256) linear_wc_kernel(
++    const half* __restrict__ xh, const uint32_t* __restrict__ T, long long stride_k, long long stride_nb,
++    const half* __restrict__ svh, const half* __restrict__ bias, void* __restrict__ y, int y_dtype,
++    float* __restrict__ Z, int* __restrict__ counters, int M, int K, int N, int SK, int WK) {
++    constexpr int NW = 8, NTH = NW * 32, RG = 16 * MT;
++    constexpr int TW = tile_words<K2>(), LW = lane_words<K2>();
++    using Lay = WcLayout<K2, RG, KS, NS>;
++    extern __shared__ __align__(128) unsigned char smb[];
++    __shared__ int last;
++    const int G = (M + RG - 1) / RG, grp = blockIdx.x % G, nb = blockIdx.x / G, split = blockIdx.y;
++    const int NB = gridDim.x / G;
++    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, g = lane >> 2, t = lane & 3;
++    const int per_warp = (K >> 4) / SK / WK, nks = per_warp * WK * (FOLD ? SK : 1), kt0 = FOLD ? 0 : split * nks;
++    const uint32_t* tiles = T + nb * stride_nb;
++    const int col0 = nb * 128, mg = grp * RG, rows = min(RG, M - mg);
++    const int S = nks / KS;
++
++    // stage s: k steps s KS .. s KS + KS - 1 of the split into ring slot s % NS; always one commit group
++    auto issue = [&](int s) {
++        if (s < S) {
++            unsigned char* st = smb + (s % NS) * Lay::STAGE;
++            constexpr int RC = Lay::RAW / 4;
++            for (int c = threadIdx.x; c < KS * RC; c += NTH) {
++                const int ks = c / RC, off = c % RC;
++                wc_cp16(st + (ks * Lay::RAW + off * 4) * 4, tiles + (size_t)(kt0 + s * KS + ks) * stride_k + off * 4);
++            }
++            unsigned char* sa = st + Lay::RAW_STAGE;
++            for (int c = threadIdx.x; c < KS * RG * 2; c += NTH) {
++                const int ks = c / (RG * 2), r = (c >> 1) % RG, ch = c & 1;
++                const int row = min(mg + r, M - 1);
++                wc_cp16(sa + (ks * RG + r) * 32 + ((ch ^ ((r >> 2) & 1)) << 4),
++                        xh + (size_t)row * K + (kt0 + s * KS + ks) * 16 + ch * 8);
++            }
++        }
++        wc_commit();
++    };
++
++    float acc[MT][2][4], tot[MT][2][4], gtot[FOLD ? MT : 1][2][4];
++#pragma unroll
++    for (int q = 0; q < MT; ++q)
++#pragma unroll
++        for (int h = 0; h < 2; ++h)
++#pragma unroll
++            for (int c = 0; c < 4; ++c) acc[q][h][c] = tot[q][h][c] = 0.f;
++
++#pragma unroll
++    for (int s = 0; s < NS - 1; ++s) issue(s);
++    const int lrow = (lane & 7) + 8 * ((lane >> 3) & 1), lch = lane >> 4;   // this lane's ldmatrix row and half
++    int r = 0, left = per_warp, sp = 0;                        // the current K range, its k steps to run; split
++#pragma unroll 1
++    for (int s = 0; s < S; ++s) {
++        wc_wait<NS - 2>();                                     // stage s has landed (this thread's copies) ...
++        __syncthreads();                                       // ... everyone's; slot s - 1 is free
++        issue(s + NS - 1);
++        const unsigned char* st = smb + (s % NS) * Lay::STAGE;
++        const uint32_t* raw = reinterpret_cast<const uint32_t*>(st);
++        const unsigned char* sa = st + Lay::RAW_STAGE;
++        uint32_t b[KS][2][2];
++#pragma unroll
++        for (int ks = 0; ks < KS; ++ks) {
++            uint32_t w[LW];
++            load_lane_words<K2>(raw + ks * Lay::RAW + warp * TW, lane, w);
++            decode_lane<K2, CB>(w, lane, b[ks][0], b[ks][1]);
++        }
++#pragma unroll
++        for (int ks = 0; ks < KS; ++ks)
++#pragma unroll
++            for (int q = 0; q < MT; ++q) {
++                uint32_t a[4];
++                const int rr = 16 * q + lrow;
++                wc_ldsm4(a, sa + (ks * RG + rr) * 32 + ((lch ^ ((rr >> 2) & 1)) << 4));
++                mma16816(acc[q][0], a, b[ks][0]);
++                mma16816(acc[q][1], a, b[ks][1]);
++            }
++        left -= KS;
++        if (left == 0) {                                       // range r done: tot = s0, then tot += s_r
++#pragma unroll
++            for (int q = 0; q < MT; ++q)
++#pragma unroll
++                for (int h = 0; h < 2; ++h)
++#pragma unroll
++                    for (int c = 0; c < 4; ++c) {
++                        tot[q][h][c] = r ? tot[q][h][c] + acc[q][h][c] : acc[q][h][c];
++                        acc[q][h][c] = 0.f;
++                    }
++            ++r;
++            left = per_warp;
++            if constexpr (FOLD) {                              // FOLD: every split in this CTA, summed in split order
++                if (r == WK) {                                 // in registers (the Z fold's gtot = S0, gtot += S1, ...)
++#pragma unroll
++                    for (int q = 0; q < MT; ++q)
++#pragma unroll
++                        for (int h = 0; h < 2; ++h)
++#pragma unroll
++                            for (int c = 0; c < 4; ++c) gtot[q][h][c] = sp ? gtot[q][h][c] + tot[q][h][c] : tot[q][h][c];
++                    r = 0;
++                    ++sp;
++                }
++            }
++        }
++    }
++    if constexpr (FOLD) {
++#pragma unroll
++        for (int q = 0; q < MT; ++q)
++#pragma unroll
++            for (int h = 0; h < 2; ++h)
++#pragma unroll
++                for (int c = 0; c < 4; ++c) tot[q][h][c] = gtot[q][h][c];
++    }
++    wc_wait<0>();
++    __syncthreads();
++
++    float* red = reinterpret_cast<float*>(smb);
++#pragma unroll
++    for (int q = 0; q < MT; ++q) {
++        const int rr = 16 * q + g;
++#pragma unroll
++        for (int h = 0; h < 2; ++h) {
++            const int col = warp * 16 + h * 8 + 2 * t;
++            *reinterpret_cast<float2*>(red + rr * 128 + col) = make_float2(tot[q][h][0], tot[q][h][1]);
++            *reinterpret_cast<float2*>(red + (rr + 8) * 128 + col) = make_float2(tot[q][h][2], tot[q][h][3]);
++        }
++    }
++    __syncthreads();
++    if (FOLD || SK == 1) {
++        for (int rr = warp; rr < rows; rr += NW) {
++            const float4 u = *reinterpret_cast<const float4*>(red + rr * 128 + 4 * lane);
++            float v[4] = {u.x, u.y, u.z, u.w};
++            finish(v, lane, svh, bias, col0 + 4 * lane);
++            store4(y, y_dtype, (size_t)(mg + rr) * N + col0 + 4 * lane, v);
++        }
++        return;
++    }
++    for (int idx = threadIdx.x; idx < rows * 32; idx += NTH) {
++        const int rr = idx >> 5, c = 4 * (idx & 31);
++        *reinterpret_cast<float4*>(Z + ((size_t)split * M + mg + rr) * N + col0 + c) =
++            *reinterpret_cast<const float4*>(red + rr * 128 + c);
++    }
++    __threadfence();
++    __syncthreads();
++    if (threadIdx.x == 0) last = atomicAdd(counters + grp * NB + nb, 1) == SK - 1;
++    __syncthreads();
++    if (last) {
++        __threadfence();
++        for (int rr = warp; rr < rows; rr += NW) {
++            const size_t at = ((size_t)mg + rr) * N + col0 + 4 * lane;
++            float4 u[8];                                       // every split's sum in flight, then added in order
++#pragma unroll
++            for (int q = 0; q < 8; ++q)
++                if (q < SK) u[q] = __ldcg(reinterpret_cast<const float4*>(Z + (size_t)q * M * N + at));
++            float4 sum = u[0];
++#pragma unroll
++            for (int q = 1; q < 8; ++q)
++                if (q < SK) { sum.x += u[q].x; sum.y += u[q].y; sum.z += u[q].z; sum.w += u[q].w; }
++            for (int q = 8; q < SK; ++q) {
++                const float4 w = __ldcg(reinterpret_cast<const float4*>(Z + (size_t)q * M * N + at));
++                sum.x += w.x; sum.y += w.y; sum.z += w.z; sum.w += w.w;
++            }
++            float v[4] = {sum.x, sum.y, sum.z, sum.w};
++            finish(v, lane, svh, bias, col0 + 4 * lane);
++            store4(y, y_dtype, (size_t)(mg + rr) * N + col0 + 4 * lane, v);
++        }
++        if (threadIdx.x == 0) counters[grp * NB + nb] = 0;
++    }
++}
++
++template <int K2, int MT, int KS, bool FOLD = false>
++void launch_wc(const at::Tensor& xh, const at::Tensor& T, int64_t stride_k, int64_t stride_nb, const at::Tensor& svh,
++               const half* bptr, at::Tensor& y, float* zptr, at::Tensor& counters, int M, int K, int N, int SK, int WK) {
++    constexpr int NS = 4, RG = 16 * MT;
++    auto kernel = linear_wc_kernel<K2, CB_MUL1, MT, KS, NS, FOLD>;
++    const int smem = WcLayout<K2, RG, KS, NS>::SMEM;
++    static bool configured = false;
++    if (!configured) {
++        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
++        configured = true;
++    }
++    dim3 grid((unsigned)((N / 128) * ((M + RG - 1) / RG)), (unsigned)(FOLD ? 1 : SK));
++    kernel<<<grid, 256, smem, at::cuda::getCurrentCUDAStream()>>>(
++        reinterpret_cast<const half*>(xh.data_ptr()), reinterpret_cast<const uint32_t*>(T.data_ptr()), stride_k,
++        stride_nb, reinterpret_cast<const half*>(svh.data_ptr()), bptr, y.data_ptr(), dtype_of(y), zptr,
++        counters.data_ptr<int>(), M, K, N, SK, WK);
++    C10_CUDA_KERNEL_LAUNCH_CHECK();
++}
++
++// mode 7 (the default): 17-128 rows of a 4- or 6-bit mul1 layer by row count and shape (swept on a GB10 over
++// the 27B's layers 2+3 and head with the loader's PLANS). Split layers with 32+ column blocks (in_proj_qkv, in_proj_z, out_proj,
++// o_proj: SK 5 or 16) run every split in one CTA (FOLD). Rows: 17-32 one 32-row group; 33-40 the mid-M kernels (4-bit,
++// unsplit); 41-64 one 64-row group; 65-96 three 32-row groups; 97-128 two 64-row groups (32-row groups for a folded
++// layer of 64+ blocks; 6 bits: 2-step stages). False: not taken (the caller runs the mid-M kernels).
++
++template <int K2>
++bool dispatch_wc(const at::Tensor& xh, const at::Tensor& T, int64_t stride_k, int64_t stride_nb, const at::Tensor& svh,
++                 const half* bptr, at::Tensor& y, float* zptr, at::Tensor& counters, int M, int K, int N, int SK,
++                 int WK) {
++    const int per_warp = K / 16 / SK / WK;
++    if (per_warp % 2 || M <= 16 || M > 128) return false;
++    const int NB = N / 128;
++    const bool fold = SK > 1 && NB >= 32;
++    if (!fold && K2 == 8 && M > 32 && M <= 40) return false;
++    const bool four = per_warp % 4 == 0 && !(K2 == 12 && M > 96);
++    const bool mt2 = M <= 32 || (M > 64 && M <= 96) || (fold && M > 96 && NB >= 64);
++#define TF_WC(MT_, F_)                                                                                           \
++    four ? launch_wc<K2, MT_, 4, F_>(xh, T, stride_k, stride_nb, svh, bptr, y, zptr, counters, M, K, N, SK, WK)  \
++         : launch_wc<K2, MT_, 2, F_>(xh, T, stride_k, stride_nb, svh, bptr, y, zptr, counters, M, K, N, SK, WK)
++    if (fold) {
++        if (mt2) TF_WC(2, true);
++        else TF_WC(4, true);
++    } else {
++        if (mt2) TF_WC(2, false);
++        else TF_WC(4, false);
++    }
++#undef TF_WC
++    return true;
++}
+diff --git a/src/tensorfold/cuda/exl3/prefill.py b/src/tensorfold/cuda/exl3/prefill.py
+index 823e3d6f..bbed3a93 100644
+--- a/src/tensorfold/cuda/exl3/prefill.py
++++ b/src/tensorfold/cuda/exl3/prefill.py
+@@ -1,7 +1,11 @@
+-"""EXL3 prompt matmuls: W_q decoded once a chunk into a fixed-tile fp16 GEMM whose epilogue rotates each 128-column block."""
++"""EXL3 prompt matmuls: the weights decoded once a call into a fixed-tile GEMM. A family that opts in
++(``Workspace(fold=True)``) decodes W'' = diag(suh) H W_q H / 128, both rotations folded in, and multiplies the raw
++bf16 rows by it; otherwise W_q is decoded into fp16 and the GEMM's epilogue rotates each 128-column block."""
+ 
+ from __future__ import annotations
+ 
++import os
++
+ import torch
+ import triton
+ import triton.language as tl
+@@ -44,16 +48,90 @@ def _gemm(X, W, H, SVH, BIAS, OUT, M, o_stride, K: tl.constexpr, N: tl.constexpr
+     tl.store(OUT + rm[:, None] * o_stride + rn[None, :], y.to(OUT.dtype.element_ty), mask=ok[:, None])
+ 
+ 
++@triton.jit(do_not_specialize=["M"])
++def _gemm_fold(X, W, SVH, BIAS, OUT, M, o_stride, K: tl.constexpr, N: tl.constexpr, BM: tl.constexpr,
++               BN: tl.constexpr, BK: tl.constexpr, GROUP: tl.constexpr, HAS_BIAS: tl.constexpr):
++    """OUT[m, n] = (x[m] @ W''[:, n]) * svh + bias, x cast to the weights' dtype as loaded; K in BK steps in order,
++    a row alone."""
++
++    pid = tl.program_id(0)
++    nm = tl.cdiv(M, BM)
++    per = GROUP * (N // BN)
++    first = (pid // per) * GROUP
++    rows = tl.minimum(nm - first, GROUP)
++    pm = first + (pid % per) % rows
++    pn = (pid % per) // rows
++    rm = pm * BM + tl.arange(0, BM)
++    rn = pn * BN + tl.arange(0, BN)
++    rk = tl.arange(0, BK)
++    ok = rm < M
++    acc = tl.zeros((BM, BN), dtype=tl.float32)
++    for k0 in range(0, K, BK):
++        x = tl.load(X + rm[:, None] * K + (k0 + rk)[None, :], mask=ok[:, None], other=0.0).to(W.dtype.element_ty)
++        w = tl.load(W + (k0 + rk)[:, None] * N + rn[None, :])
++        acc = tl.dot(x, w, acc)
++    y = acc * tl.load(SVH + rn).to(tl.float32)[None, :]
++    if HAS_BIAS:
++        y += tl.load(BIAS + rn).to(tl.float32)[None, :]
++    tl.store(OUT + rm[:, None] * o_stride + rn[None, :], y.to(OUT.dtype.element_ty), mask=ok[:, None])
++
++
+ def tiles(k: int, n: int) -> tuple[int, int, int, int, int]:
+     """(rows a program, K step, warps, stages, row blocks a raster group): the shape's alone, so a row never depends on its chunk."""
+ 
+-    return 128, 32, 8, 4, 8
++    return 128, 64, 8, 4, 8
++
++
++# _gemm_fold's (BM, BN, BK, warps, stages, raster group) for the 27B's projections (K, N), swept on a GB10
++FOLD_TILES = {
++    (5120, 1024): (128, 256, 64, 8, 3, 4), (5120, 6144): (128, 256, 64, 8, 3, 16),
++    (5120, 10240): (128, 256, 64, 8, 3, 8), (5120, 12288): (128, 256, 64, 8, 3, 8),
++    (5120, 17408): (128, 256, 64, 8, 3, 8), (6144, 5120): (128, 256, 64, 8, 3, 16),
++    (17408, 5120): (128, 256, 64, 8, 3, 8),
++}
++FOLD = os.environ.get("TENSORFOLD_EXL3_FOLD", "1") != "0"            # 0: every family on the W_q path
++FOLD_BF16 = os.environ.get("TENSORFOLD_EXL3_FOLD_BF16", "1") != "0"  # 0: fp16 W'' (and fp16 rows in the GEMM)
++FOLD2 = os.environ.get("TENSORFOLD_EXL3_FOLD2", "1") != "0"          # 0: unpack_fold, the same bits, slower
++FDIRECT_ROWS = int(os.environ.get("TENSORFOLD_EXL3_FDIRECT_ROWS", "0"))    # 4-bit calls this short: fdirect (0: never, the default)
++SCOPE: list | None = None            # layer-major prefill: the layers whose W'' is held now (None: none is held)
++
++
++def tiles_fold(k: int, n: int) -> tuple[int, int, int, int, int, int]:
++    """_gemm_fold's tile for a (K, N): by the shape alone, never by the row count."""
++
++    if (k, n) in FOLD_TILES:
++        return FOLD_TILES[(k, n)]
++    if n % 256 == 0 and k % 64 == 0 and (k >= 6144 or n >= 6144):
++        return 128, 256, 64, 8, 3, 8
++    return 128, 128, 32, 8, 4, 8
++
++
++def scope_begin() -> None:
++    """Hold each W'' a folded call decodes until ``scope_release`` (a layer-major prefill: one layer at a time)."""
++
++    global SCOPE
++    SCOPE = []
++
++
++def scope_release() -> None:
++    if SCOPE:
++        for layer in SCOPE:
++            layer._prompt_w = None
++        SCOPE.clear()
++
++
++def scope_end() -> None:
++    global SCOPE
++    scope_release()
++    SCOPE = None
+ 
+ 
+ class Workspace:
+-    """One decoded W_q and one rotated input, grown to the largest call and reused (calls run in order on one stream)."""
++    """One decoded weight and one rotated input, grown to the largest call and reused (calls run in order on one
++    stream); ``fold``: bf16 calls take the folded path (W'' and raw rows)."""
+ 
+-    def __init__(self) -> None:
++    def __init__(self, fold: bool = False) -> None:
++        self.fold = fold
+         self.w: torch.Tensor | None = None
+         self.xh: torch.Tensor | None = None
+         self.h: torch.Tensor | None = None
+@@ -83,6 +161,29 @@ def matmul(layer: Exl3Linear, x: torch.Tensor, out: torch.Tensor, ws: Workspace)
+     if x.shape[1] != k or out.shape != (m, n) or out.stride(1) != 1:
+         raise ValueError(f"prefill matmul: x {tuple(x.shape)} and out {tuple(out.shape)} do not match K={k}, N={n}")
+     ext = _ext()
++    if FOLD and ws.fold and out.dtype == torch.bfloat16 and x.dtype == torch.bfloat16:
++        wq = getattr(layer, "_prompt_w", None) if SCOPE is not None else None
++        if (wq is None and m <= FDIRECT_ROWS and FOLD_BF16 and layer.k2 == 8 and x.stride(1) == 1
++                and x.stride(0) % 2 == 0 and x.data_ptr() % 4 == 0):   # bf16 W'' rebuilt in the GEMM: the same bits
++            ext.fdirect(x, layer.words, *layer.strides, layer.suh, layer.svh, layer.bias, out, layer.k2,
++                        CODEBOOK_IDS[layer.codebook])
++            return out
++        if wq is None:
++            wdt = torch.bfloat16 if FOLD_BF16 else torch.float16
++            wq = (torch.empty((k, n), device=x.device, dtype=wdt) if SCOPE is not None
++                  else ws._grow("w", k * n, x.device)[:k * n].view(k, n).view(wdt))
++            (ext.unpack_fold2 if FOLD2 else ext.unpack_fold)(layer.words, layer.suh, wq, *layer.strides, layer.k2,
++                                                             CODEBOOK_IDS[layer.codebook])
++            if SCOPE is not None:                  # held for the layer's other chunks
++                layer._prompt_w = wq
++                SCOPE.append(layer)
++        bm, bn, bk, warps, stages, group = tiles_fold(k, n)
++        bias = layer.bias if layer.bias is not None else layer.svh
++        x = x if x.stride(1) == 1 and x.stride(0) == k else x.contiguous()
++        _gemm_fold[(triton.cdiv(m, bm) * (n // bn),)](x, wq, layer.svh, bias, out, m, out.stride(0), K=k, N=n, BM=bm,
++                                                      BN=bn, BK=bk, GROUP=group, HAS_BIAS=layer.bias is not None,
++                                                      num_warps=warps, num_stages=stages)
++        return out
+     xh = ws._grow("xh", m * k, x.device)[:m * k].view(m, k)
+     ext.rot_in(x.contiguous(), layer.suh, xh)
+     wq = ws._grow("w", k * n, x.device)[:k * n].view(k, n)
+diff --git a/src/tensorfold/families/qwen3_5/cuda/engine.py b/src/tensorfold/families/qwen3_5/cuda/engine.py
+index 8b7057d6..b868738b 100644
+--- a/src/tensorfold/families/qwen3_5/cuda/engine.py
++++ b/src/tensorfold/families/qwen3_5/cuda/engine.py
+@@ -91,7 +91,9 @@ class Qwen27Engine:
+         # an affine checkpoint's packed words at their stored precision; an EXL3 pack's by its own format
+         tensor_bytes = weight_transform(model_dir, one_gpu=tp == 1)
+         if exl3:
+-            geometry, tensor_bytes = admission(geometry)
++            from .prefill import LAYER_MAJOR
++
++            geometry, tensor_bytes = admission(geometry, layer_major=LAYER_MAJOR)
+         elif nvfp4:
+             from .nvfp4_load import admission as nvfp4_admission
+ 
+diff --git a/src/tensorfold/families/qwen3_5/cuda/exl3_load.py b/src/tensorfold/families/qwen3_5/cuda/exl3_load.py
+index 7f977cb4..994c69ec 100644
+--- a/src/tensorfold/families/qwen3_5/cuda/exl3_load.py
++++ b/src/tensorfold/families/qwen3_5/cuda/exl3_load.py
+@@ -28,16 +28,21 @@ def quant_config(model_dir: Path) -> dict | None:
+     return None
+ 
+ 
+-def admission(geometry):
+-    """An EXL3 pack's admission: the MLX path's geometry plus the prompt matmuls' workspace, and its tensors' bytes."""
++def admission(geometry, layer_major: bool = False):
++    """An EXL3 pack's admission: the MLX path's geometry plus the prompt matmuls' workspace, and its tensors' bytes.
++    ``layer_major``: a prompt run layer by layer keeps each row's residual stream (4 * hidden bytes) live."""
+ 
++    from tensorfold.cuda.capacity import Geometry
+     from tensorfold.cuda.geometry import exl3_weights, exl3_workspace, with_fixed
+ 
+     def with_workspace(text):
+         from .prefill import CHUNK
+ 
+         d, i = int(text["hidden_size"]), int(text["intermediate_size"])
+-        return with_fixed(geometry(text), exl3_workspace(d * i, CHUNK, max(d, i)))
++        fixed = with_fixed(geometry(text), exl3_workspace(d * i, CHUNK, max(d, i)))
++        if not layer_major:
++            return fixed
++        return Geometry(lambda slots: fixed.bytes_at(slots) + 4 * d * slots, fixed.reserve, fixed.minimum_slots)
+ 
+     return with_workspace, exl3_weights
+ 
+@@ -119,7 +124,7 @@ def load_exl3(model_dir: str | Path, device: str = "cuda"):
+     where = _where(model_dir)
+     files = _files(model_dir, where)
+     plain = _read(files, where, [n for n in ckpt.plain if not foreign(n)], device)
+-    exl3 = _read_groups(files, groups, device, Workspace())
++    exl3 = _read_groups(files, groups, device, Workspace(fold=True))
+     files.close()                                    # the reader's pinned staging goes back to the system
+ 
+     def group(name: str):
+diff --git a/src/tensorfold/families/qwen3_5/cuda/multi.py b/src/tensorfold/families/qwen3_5/cuda/multi.py
+index 751b5a06..b0d97e07 100644
+--- a/src/tensorfold/families/qwen3_5/cuda/multi.py
++++ b/src/tensorfold/families/qwen3_5/cuda/multi.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++import os
+ import time
+ 
+ import torch
+@@ -24,6 +25,7 @@ from .weights import Weights
+ ADMIT, ROUND, DONE, FILL, FILLS = 1, 2, 3, 4, 5   # rank 0's messages
+ COPY, TREE, ONE = 0, 1, 2               # a stream's window this round
+ STEP = 1024                             # prompt rows a prefill step takes while other streams decode
++TAIL_MERGE = os.environ.get("TENSORFOLD_PREFILL_TAIL_MERGE", "1") != "0"   # a short tail after the last stop: one call
+ GROW = 8192                             # rows a stream's attention caches grow by at a time (one GPU)
+ GIB = 1024**3
+ TIMED = 16                              # the last rounds whose time beside the forward sets a stream count's overhead
+@@ -86,6 +88,15 @@ def _unflatten(flat: list[int], pairs: bool) -> list:
+     return out
+ 
+ 
++def _tail(s: Stream, stop: int) -> bool:
++    """A step to the prompt's last stop with fewer than MIN_GAP rows after it: the tail fills in the same call, and the
++    stop's entry is the state kept there (one prefill call a prompt, so an EXL3 pack decodes its weights once)."""
++
++    n = len(s.prompt)
++    return (TAIL_MERGE and stop < n and s.vision is None and bool(s.stops) and stop == s.stops[-1]
++            and n - stop < MIN_GAP)
++
++
+ class MultiDecoder:
+     """The ``Scheduler``'s decoder on one GPU or as ``rank`` of two; a stream's window holds at most 16 rows."""
+ 
+@@ -314,20 +325,24 @@ class MultiDecoder:
+ 
+         t0 = time.perf_counter()
+         drafter = self.draft if self.drafts else None
+-        ends, pieces = [], []
++        ends, pieces, steps = [], [], []
+         for s, stop in batch:
+             n = len(s.prompt)
+             end = entry_end(s.prompt) if (stop == n and s.draft and s.vision is None
+                                           and not (s.stops and n - s.stops[-1] < MIN_GAP)) else None
++            merge = _tail(s, stop)               # as _step
++            if merge:
++                stop, end = n, stop
+             ends.append(end)
++            steps.append((s, stop, merge))
+             pieces.append(Piece(s.prompt[:stop], s.st, end, s.snap if s.draft and drafter is not None else None))
+         firsts = []
+         try:
+             outs = prefill_batch(self.w, pieces, tp=self.world == 2, draft=drafter)
+-            for (s, stop), end, (normed, at, snap) in zip(batch, ends, outs):
++            for (s, stop, merge), end, (normed, at, snap) in zip(steps, ends, outs):
+                 if snap is not None:
+                     s.snap = snap
+-                if stop in s.stops:
++                if stop in s.stops and not merge:
+                     self.cache.add(list(s.prompt[:stop]), kept(s.st), own(s.snap))
+                 n = len(s.prompt)
+                 firsts.append(None if stop < n else first_token(self.w, normed, n, s.sampling, self.rank, self.world,
+@@ -362,13 +377,16 @@ class MultiDecoder:
+             n = len(s.prompt)             # the prompt end is kept one token early, unless a message start covers it
+             end = entry_end(s.prompt) if (stop == n and s.draft and s.vision is None
+                                           and not (s.stops and n - s.stops[-1] < MIN_GAP)) else None
++            merge = _tail(s, stop)
++            if merge:
++                stop, end = n, stop
+             out = prefill_state(self.w, s.prompt[:stop], s.st, tp=self.world == 2, draft=drafter, keep_at=end,
+                                 vision=s.vision)
+             normed = out if end is None else out[0]
+             if drafter is not None:
+                 s.snap = drafter.snapshot()
+                 drafter.skip(0)                  # no reference of its own: rounds read and replace s.snap's context
+-            if stop in s.stops:
++            if stop in s.stops and not merge:
+                 self.cache.add(list(s.prompt[:stop]), kept(s.st), own(s.snap))
+             first = None if stop < n else first_token(self.w, normed, n, s.sampling, self.rank, self.world,
+                                                      s.constraint)
+diff --git a/src/tensorfold/families/qwen3_5/cuda/prefill.py b/src/tensorfold/families/qwen3_5/cuda/prefill.py
+index 6ab28c78..5448e1c3 100644
+--- a/src/tensorfold/families/qwen3_5/cuda/prefill.py
++++ b/src/tensorfold/families/qwen3_5/cuda/prefill.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++import os
+ from dataclasses import dataclass
+ from typing import Any, Sequence
+ 
+@@ -21,6 +22,10 @@ from .qmm_fast import matmul, matmul_partial, tile
+ from .weights import Plain, QLinear, Weights
+ 
+ CHUNK = 4096
++# An EXL3 pack's prompt of several chunks runs layer by layer (every chunk through layer l, then layer l + 1), so each
++# layer's weights are decoded once a prompt instead of once a chunk, one layer's held at a time. Same calls per chunk
++# (prefill_rows' rows of one chunk), the same bits as chunk by chunk. TENSORFOLD_PREFILL_LAYER_MAJOR=0: chunk by chunk.
++LAYER_MAJOR = os.environ.get("TENSORFOLD_PREFILL_LAYER_MAJOR", "1") != "0"
+ TAP_LAYERS = (5, 19, 33, 47, 61)
+ 
+ 
+@@ -195,6 +200,33 @@ def prefill_state(w: Weights, prompt: Sequence[int], st: State, *, tp: bool = Fa
+         tap_from = end - draft.window
+         draft.skip(tap_from - base)
+     spans = chunks(base, n, size or getattr(w, "prompt_rows", CHUNK))       # stand-in weights take 4096
++    if (LAYER_MAJOR and getattr(w, "quant", None) == "exl3" and len(spans) > 1 and not tp and vision is None
++            and all(layer.moe is None for layer in w.layers)):
++        if keep_at is not None and base < keep_at < n:          # a kept chunk start: a cut one row on (any bounds,
++            spans = [(a + (a == keep_at), b + (b == keep_at)) for a, b in spans]   # the same bits)
++        if keep_at == base:
++            kept = (clone_state(st), draft.snapshot() if draft is not None else None)
++        wants = [draft is not None and b > tap_from for _, b in spans]
++        cuts = [keep_at - a if keep_at is not None and a < keep_at < b else 0 for a, b in spans]
++        groups = [_Rows(w, [(prompt[a:b], st, a, cut)], tp=tp, capture_taps=want)
++                  for (a, b), cut, want in zip(spans, cuts, wants)]
++        for (a, b), cut, want, [(normed, taps, part)] in zip(spans, cuts, wants, _layer_major(w, groups)):
++            snap = None
++            if want:                               # the drafter takes the taps in chunk order, as chunk by chunk
++                rows = taps[max(0, tap_from - a):]
++                if cut:
++                    split = keep_at - max(a, tap_from)
++                    if split:
++                        draft.add_taps(rows[:split])
++                    snap, rows = draft.snapshot(), rows[split:]
++                draft.add_taps(rows)
++            if part is not None:
++                kept = (part, snap)
++        if keep_at is None:
++            return normed
++        if keep_at == n:
++            kept = (clone_state(st), draft.snapshot() if draft is not None else None)
++        return normed, kept
+     for j, (a, b) in enumerate(spans):
+         if keep_at == a:
+             kept = (clone_state(st), draft.snapshot() if draft is not None else None)
+@@ -237,36 +269,45 @@ def _pinned(values: np.ndarray, device) -> torch.Tensor:
+     return torch.from_numpy(np.ascontiguousarray(values, dtype=np.int32)).pin_memory().to(device, non_blocking=True)
+ 
+ 
+-@torch.no_grad()
+-def prefill_rows(w: Weights, items: list[tuple[Sequence[int], State, int]], *, tp: bool = False,
+-                 capture_taps: bool = False) -> list[tuple[torch.Tensor, torch.Tensor | None, State | None]]:
+-    """``prefill_chunk`` for several streams in one forward (dense text layers): ``items`` are (ids, state, cut).
+-    Projections, norms and MLPs run over every row at once, each row's bits its own; each stream's convolution
+-    windows, DeltaNet chains and attention read its own state. Per item: (last row normed, taps, the state at cut)."""
+-
+-    c = w.config
+-    if any(layer.moe is not None for layer in w.layers):
+-        raise ValueError("a batched prefill takes dense layers only")
+-    pg = prefill_glue if w.fast_prefill and prompt_precision.fp8() else prefill_bf16
+-    sts = [st for _, st, _ in items]
+-    sizes = [len(ids) for ids, _, _ in items]
+-    starts = np.concatenate([[0], np.cumsum(sizes)]).tolist()
+-    W, keep, dev = starts[-1], c.conv_kernel - 1, w.norm.device
+-    p0s = [st.pos for st in sts]
+-    for (_, _, cut), n in zip(items, sizes):
+-        if not 0 <= cut < n:
+-            raise ValueError(f"cut {cut} is not inside a piece of {n} rows")
+-    local = [np.arange(n)[:, None] + np.arange(keep + 1)[None, :] for n in sizes]
+-    windows = _pinned(np.concatenate([np.where(t < keep, t, t + o) for t, o in zip(local, starts)]), dev)
+-    sids = _pinned(np.repeat(np.arange(len(items)), sizes), dev)
+-    pos = _pinned(np.concatenate([np.arange(p, p + n) for p, n in zip(p0s, sizes)]), dev)
+-    ids = _pinned(np.concatenate([np.asarray(ids, dtype=np.int64) for ids, _, _ in items]), dev)
+-    x = glue.embedding(ids, w.embed)
+-    pending: torch.Tensor | None = None
+-    taps: list[torch.Tensor] = []
+-    parts = [clone_state(st) if cut else None for _, st, cut in items]
+-    spans = list(zip(starts, sizes))
+-    for i, layer in enumerate(w.layers):
++class _Rows:
++    """One forward over several streams' rows (``prefill_rows``), set up once and run a layer at a time: ``items`` are
++    (ids, state, first position, cut). Layer-major prefill keeps several of these (a prompt's chunks) and runs layer l
++    of each in turn before layer l + 1; a chunk's state is its stream's, advanced by the chunks before it."""
++
++    def __init__(self, w: Weights, items, *, tp: bool = False, capture_taps: bool = False) -> None:
++        c = w.config
++        if any(layer.moe is not None for layer in w.layers):
++            raise ValueError("a batched prefill takes dense layers only")
++        self.w, self.tp, self.capture_taps = w, tp, capture_taps
++        self.pg = prefill_glue if w.fast_prefill and prompt_precision.fp8() else prefill_bf16
++        self.items = items
++        self.sts = [st for _, st, _, _ in items]
++        sizes = [len(ids) for ids, _, _, _ in items]
++        starts = np.concatenate([[0], np.cumsum(sizes)]).tolist()
++        self.W, self.keep, dev = starts[-1], c.conv_kernel - 1, w.norm.device
++        self.p0s = [p0 for _, _, p0, _ in items]
++        keep = self.keep
++        for (_, _, _, cut), n in zip(items, sizes):
++            if not 0 <= cut < n:
++                raise ValueError(f"cut {cut} is not inside a piece of {n} rows")
++        local = [np.arange(n)[:, None] + np.arange(keep + 1)[None, :] for n in sizes]
++        self.windows = _pinned(np.concatenate([np.where(t < keep, t, t + o) for t, o in zip(local, starts)]), dev)
++        self.sids = _pinned(np.repeat(np.arange(len(items)), sizes), dev)
++        self.pos = _pinned(np.concatenate([np.arange(p, p + n) for p, n in zip(self.p0s, sizes)]), dev)
++        ids = _pinned(np.concatenate([np.asarray(ids, dtype=np.int64) for ids, _, _, _ in items]), dev)
++        self.x = glue.embedding(ids, w.embed)
++        self.pending: torch.Tensor | None = None
++        self.taps: list[torch.Tensor] = []
++        self.parts = [clone_state(st) if cut else None for _, st, _, cut in items]
++        self.spans = list(zip(starts, sizes))
++
++    def layer(self, i: int, layer) -> None:
++        w, tp, pg, c = self.w, self.tp, self.pg, self.w.config
++        sts, parts, spans, p0s = self.sts, self.parts, self.spans, self.p0s
++        W, keep, windows, sids, pos = self.W, self.keep, self.windows, self.sids, self.pos
++        items = [(ids, st, cut) for ids, st, _, cut in self.items]
++        capture_taps, taps = self.capture_taps, self.taps
++        x, pending = self.x, self.pending
+         x, h = pg.add_rmsnorm(x, pending, layer.input_norm, c.eps)
+         if layer.linear:
+             gdn = layer.gdn
+@@ -320,16 +361,49 @@ def prefill_rows(w: Weights, items: list[tuple[Sequence[int], State, int]], *, t
+         pending = _mlp(h, layer, pg, tp)
+         if capture_taps and i in TAP_LAYERS:
+             taps.append((x.float() + pending.float()).to(torch.bfloat16))
+-    every = torch.cat(taps, dim=-1) if capture_taps else None
+-    out = []
+-    for st, part, p0, (_, _, cut), (o, n) in zip(sts, parts, p0s, items, spans):
+-        st.pos = p0 + n
+-        _, normed, _ = glue.add_rmsnorm(x[o + n - 1:o + n].contiguous(), pending[o + n - 1:o + n].contiguous(),
+-                                        w.norm, c.eps)
+-        if part is not None:
+-            part.pos = p0 + cut                     # the piece's buffers: their rows below part.pos stay as committed
+-        out.append((normed, None if every is None else every[o:o + n], part))
+-    return out
++        self.x, self.pending = x, pending
++
++    def finish(self) -> list[tuple[torch.Tensor, torch.Tensor | None, State | None]]:
++        c, x, pending = self.w.config, self.x, self.pending
++        every = torch.cat(self.taps, dim=-1) if self.capture_taps else None
++        out = []
++        for st, part, p0, (_, _, _, cut), (o, n) in zip(self.sts, self.parts, self.p0s, self.items, self.spans):
++            st.pos = p0 + n
++            _, normed, _ = glue.add_rmsnorm(x[o + n - 1:o + n].contiguous(), pending[o + n - 1:o + n].contiguous(),
++                                            self.w.norm, c.eps)
++            if part is not None:
++                part.pos = p0 + cut                 # the piece's buffers: their rows below part.pos stay as committed
++            out.append((normed, None if every is None else every[o:o + n], part))
++        return out
++
++
++@torch.no_grad()
++def prefill_rows(w: Weights, items: list[tuple[Sequence[int], State, int]], *, tp: bool = False,
++                 capture_taps: bool = False) -> list[tuple[torch.Tensor, torch.Tensor | None, State | None]]:
++    """``prefill_chunk`` for several streams in one forward (dense text layers): ``items`` are (ids, state, cut).
++    Projections, norms and MLPs run over every row at once, each row's bits its own; each stream's convolution
++    windows, DeltaNet chains and attention read its own state. Per item: (last row normed, taps, the state at cut)."""
++
++    rows = _Rows(w, [(ids, st, st.pos, cut) for ids, st, cut in items], tp=tp, capture_taps=capture_taps)
++    for i, layer in enumerate(w.layers):
++        rows.layer(i, layer)
++    return rows.finish()
++
++
++def _layer_major(w: Weights, groups: list[_Rows]) -> list[list[tuple]]:
++    """Layer l of every group, then layer l + 1; an EXL3 pack's decoded prompt weights live for one layer."""
++
++    from tensorfold.cuda.exl3 import prefill as exl3_prefill
++
++    exl3_prefill.scope_begin()
++    try:
++        for i, layer in enumerate(w.layers):
++            for g in groups:
++                g.layer(i, layer)
++            exl3_prefill.scope_release()             # this layer's decoded prompt weights
++    finally:
++        exl3_prefill.scope_end()
++    return [g.finish() for g in groups]
+ 
+ 
+ @torch.no_grad()
+diff --git a/tests/cuda/test_exl3_linear.py b/tests/cuda/test_exl3_linear.py
+index a03ae864..da8e3c36 100644
+--- a/tests/cuda/test_exl3_linear.py
++++ b/tests/cuda/test_exl3_linear.py
+@@ -156,3 +156,28 @@ def test_split_k_without_bias_agrees_with_zero_bias_and_preserves_rows(codebook,
+         assert torch.equal(expected.view(torch.int32), got_bias.view(torch.int32))
+         alone = torch.cat([plain(row[None], out_dtype=torch.float32) for row in x[:rows]])
+         assert torch.equal(out.view(torch.int32), alone.view(torch.int32))
++
++
++MODES = (0, 6, 7)               # linear.MODE: linear_kernel at every row count; the mid-M kernels; linear_wc
++# (bits, K, N, split): the 27B's projections with the loader's splits, a split layer of 32+ column blocks, others
++MODE_SHAPES = [(4, 17408, 5120, (1, 8)), (4, 5120, 10240, (5, 4)), (4, 5120, 6144, (5, 2)), (4, 6144, 5120, (16, 2)),
++               (3, 17408, 5120, (4, 2)), (6, 5120, 4096, (5, 2)), (6, 1024, 2048, (1, 8)), (2, 2048, 1024, (2, 4))]
++
++
++@pytest.mark.parametrize("bits,k,n,split", MODE_SHAPES, ids=lambda v: str(v))
++@pytest.mark.parametrize("codebook", ["mul1", "3inst"])
++def test_every_kernel_mode_gives_linear_kernels_bits(monkeypatch, codebook, bits, k, n, split):
++    """Rows 1..128: each mode's output equals linear_kernel's bit for bit, and a row alone equals it inside 128."""
++
++    trellis, suh, svh = _tensors(codebook, bits, kt=k // 16, nt=n // 16, seed=k + n)
++    layer = linear.Exl3Linear.from_tensors(trellis, suh, svh, codebook)
++    layer.split = split
++    x = torch.randn((128, k), device="cuda").half()
++    monkeypatch.setattr(linear, "MODE", 0)
++    ref = layer(x)
++    for mode in MODES[1:]:
++        monkeypatch.setattr(linear, "MODE", mode)
++        for m in range(1, 129):
++            assert torch.equal(layer(x[:m]), ref[:m]), f"mode {mode}, {m} rows"
++        for r in (0, 17, 127):
++            assert torch.equal(layer(x[r:r + 1]), ref[r:r + 1]), f"mode {mode}, row {r} alone"
+diff --git a/tests/cuda/test_exl3_prefill.py b/tests/cuda/test_exl3_prefill.py
+new file mode 100644
+index 00000000..352b3233
+--- /dev/null
++++ b/tests/cuda/test_exl3_prefill.py
+@@ -0,0 +1,149 @@
++"""The EXL3 prompt matmul (``cuda/exl3/prefill.py``) on a GPU, on synthetic layers: every path a row can take gives
++the same bits whatever the row count, and the paths that replace one another (tile changes, kernels that rebuild the
++same decoded weights) give the bits of the path they replace."""
++
++from __future__ import annotations
++
++import numpy as np
++import pytest
++import torch
++
++from tensorfold.cuda.exl3 import format as fmt
++from tensorfold.cuda.exl3 import linear, prefill
++
++if not torch.cuda.is_available():
++    pytest.skip("CUDA only", allow_module_level=True)
++
++ROWS = (1, 3, 16, 17, 33, 48, 49, 64, 128, 129, 300)
++FOLD_COMBOS = [("mul1", 4), ("mul1", 3), ("mul1", 2.5), ("mul1", 6), ("3inst", 2), ("3inst", 8), ("mcg", 4)]
++
++
++def _layer(codebook: str, bits: float, k: int, n: int, seed: int = 0, bias: bool = False) -> linear.Exl3Linear:
++    """A synthetic group: random trellis words, small scales; K and N multiples of 128."""
++
++    rng = np.random.default_rng(seed)
++    trellis = torch.from_numpy(rng.integers(-2**15, 2**15, size=(k // 16, n // 16, fmt.tile_words(bits)))
++                               .astype(np.int16))
++    suh = torch.from_numpy((rng.standard_normal(k) * 0.05).astype(np.float16))
++    svh = torch.from_numpy((rng.standard_normal(n) * 0.05).astype(np.float16))
++    b = torch.from_numpy((rng.standard_normal(n) * 0.05).astype(np.float16)) if bias else None
++    return linear.Exl3Linear.from_tensors(trellis, suh, svh, codebook, b)
++
++
++def _rows(m: int, k: int, seed: int = 1) -> torch.Tensor:
++    gen = torch.Generator(device="cuda").manual_seed(seed)
++    return torch.randn((m, k), generator=gen, device="cuda").to(torch.bfloat16)
++
++
++def _run(layer: linear.Exl3Linear, x: torch.Tensor, ws: prefill.Workspace) -> torch.Tensor:
++    out = torch.empty((x.shape[0], layer.n), dtype=torch.bfloat16, device=x.device)
++    return prefill.matmul(layer, x, out, ws)
++
++
++@pytest.mark.parametrize("codebook,bits,k,n", [("mul1", 4, 5120, 6144), ("mul1", 3, 1024, 2048),
++                                                ("3inst", 2, 512, 1024), ("mcg", 6, 1024, 512)])
++def test_the_k_step_leaves_the_bits_unchanged(monkeypatch, codebook, bits, k, n):
++    """K steps of 64 sum the same products in the same order as steps of 32: the same output bits."""
++
++    layer = _layer(codebook, bits, k, n, bias=True)
++    x = _rows(300, k)
++    now = _run(layer, x, prefill.Workspace())
++    monkeypatch.setattr(prefill, "tiles", lambda k, n: (128, 32, 8, 4, 8))
++    assert torch.equal(_run(layer, x, prefill.Workspace()), now)
++
++
++
++@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
++@pytest.mark.parametrize("codebook,bits", FOLD_COMBOS)
++def test_unpack_fold2_equals_unpack_fold(codebook, bits, dtype):
++    """The fast fold kernel gives the straightforward one's W'' bit for bit, in bf16 and fp16."""
++
++    layer = _layer(codebook, bits, 512, 1024, seed=3)
++    ext = linear._ext()
++    a = torch.empty((layer.k, layer.n), dtype=dtype, device="cuda")
++    b = torch.empty_like(a)
++    ext.unpack_fold(layer.words, layer.suh, a, *layer.strides, layer.k2, linear.CODEBOOK_IDS[codebook])
++    ext.unpack_fold2(layer.words, layer.suh, b, *layer.strides, layer.k2, linear.CODEBOOK_IDS[codebook])
++    assert torch.equal(a.view(torch.int16), b.view(torch.int16))
++
++
++@pytest.mark.parametrize("codebook,bits", [("mul1", 4), ("3inst", 3), ("mcg", 6)])
++def test_folded_weights_match_the_float64_reference(codebook, bits):
++    rng = np.random.default_rng(5)
++    k, n = 256, 384
++    trellis = torch.from_numpy(rng.integers(-2**15, 2**15, size=(k // 16, n // 16, fmt.tile_words(bits)))
++                               .astype(np.int16))
++    suh = torch.from_numpy((rng.standard_normal(k) * 0.05).astype(np.float16))
++    svh = torch.from_numpy((rng.standard_normal(n) * 0.05).astype(np.float16))
++    layer = linear.Exl3Linear.from_tensors(trellis, suh, svh, codebook)
++    want = suh.double().numpy()[:, None] * fmt.rotate(fmt.rotate(fmt.unpack(trellis, bits, codebook)
++                                                                 .astype(np.float64), 1), 0)
++    got = torch.empty((k, n), dtype=torch.bfloat16, device="cuda")
++    linear._ext().unpack_fold2(layer.words, layer.suh, got, *layer.strides, layer.k2, linear.CODEBOOK_IDS[codebook])
++    err = np.linalg.norm(got.double().cpu().numpy() - want) / np.linalg.norm(want)
++    assert err < 4e-3                                          # one bf16 rounding (2^-9 relative at most)
++
++
++def test_the_folded_path_matches_the_float64_reference():
++    rng = np.random.default_rng(6)
++    k, n, bits = 512, 256, 4
++    trellis = torch.from_numpy(rng.integers(-2**15, 2**15, size=(k // 16, n // 16, fmt.tile_words(bits)))
++                               .astype(np.int16))
++    suh = torch.from_numpy((rng.standard_normal(k) * 0.05).astype(np.float16))
++    svh = torch.from_numpy((rng.standard_normal(n) * 0.05).astype(np.float16))
++    bias = torch.from_numpy((rng.standard_normal(n) * 0.05).astype(np.float16))
++    layer = linear.Exl3Linear.from_tensors(trellis, suh, svh, "mul1", bias)
++    x = _rows(37, k)
++    got = _run(layer, x, prefill.Workspace(fold=True))
++    w64 = suh.double().numpy()[:, None] * fmt.rotate(fmt.rotate(fmt.unpack(trellis, bits, "mul1")
++                                                                .astype(np.float64), 1), 0)
++    want = (x.double().cpu().numpy() @ w64) * svh.double().numpy() + bias.double().numpy()
++    err = np.linalg.norm(got.double().cpu().numpy() - want) / np.linalg.norm(want)
++    assert err < 6e-3                                          # bf16 weights and output
++
++
++@pytest.mark.parametrize("codebook,bits,k,n", [("mul1", 4, 5120, 6144), ("mul1", 3, 1024, 2048),
++                                                ("3inst", 2, 512, 1024), ("mcg", 6, 1024, 512)])
++def test_folded_rows_never_depend_on_the_row_count(codebook, bits, k, n):
++    """A row's bits on the folded path are the same alone, in any window and at any offset."""
++
++    layer = _layer(codebook, bits, k, n, bias=True)
++    ws = prefill.Workspace(fold=True)
++    x = _rows(300, k)
++    whole = _run(layer, x, ws)
++    for m in ROWS:
++        assert torch.equal(_run(layer, x[:m], ws), whole[:m]), f"rows 0..{m}"
++        r0 = min(5, 300 - m)
++        assert torch.equal(_run(layer, x[r0:r0 + m], ws), whole[r0:r0 + m]), f"rows {r0}..{r0 + m}"
++    for r in (0, 1, 47, 128, 299):
++        assert torch.equal(_run(layer, x[r:r + 1], ws), whole[r:r + 1]), f"row {r} alone"
++
++
++def test_the_folded_path_is_opt_in(monkeypatch):
++    """A plain Workspace keeps the W_q path's bits; TENSORFOLD_EXL3_FOLD=0 puts an opted-in family back on it."""
++
++    layer = _layer("mul1", 4, 1024, 512)
++    x = _rows(40, 1024)
++    plain = _run(layer, x, prefill.Workspace())
++    assert not torch.equal(_run(layer, x, prefill.Workspace(fold=True)), plain)
++    monkeypatch.setattr(prefill, "FOLD", False)
++    assert torch.equal(_run(layer, x, prefill.Workspace(fold=True)), plain)
++
++
++@pytest.mark.parametrize("codebook,k,n,bias", [("mul1", 5120, 6144, False), ("mul1", 17408, 5120, False),
++                                                ("mul1", 6144, 5120, True), ("3inst", 1024, 512, True),
++                                                ("mcg", 512, 1024, False)])
++def test_fdirect_gives_unpack_fold2_and_the_gemms_bits(monkeypatch, codebook, k, n, bias):
++    """4-bit calls of up to FDIRECT_ROWS rows rebuild W'' inside one kernel: the bits of W'' decoded and then
++    multiplied, at every row count it may take (one kernel per 128-row slice above 128)."""
++
++    if bias:
++        pytest.xfail("fdirect with a bias does not yet match _gemm_fold's epilogue rounding; fdirect is off by default")
++    layer = _layer(codebook, 4, k, n, seed=k, bias=bias)
++    ws = prefill.Workspace(fold=True)
++    x = _rows(200, k, seed=2)
++    monkeypatch.setattr(prefill, "FDIRECT_ROWS", 0)
++    want = _run(layer, x, ws)
++    monkeypatch.setattr(prefill, "FDIRECT_ROWS", 200)
++    for m in (1, 3, 16, 17, 33, 48, 64, 100, 128, 200):
++        assert torch.equal(_run(layer, x[:m], ws), want[:m]), f"{m} rows"
+diff --git a/tests/cuda/test_qwen27_exl3_prefill.py b/tests/cuda/test_qwen27_exl3_prefill.py
+new file mode 100644
+index 00000000..815c1eab
+--- /dev/null
++++ b/tests/cuda/test_qwen27_exl3_prefill.py
+@@ -0,0 +1,184 @@
++"""Qwen3.8-27B's prompt path on an EXL3 pack (folded weights): a prompt of several chunks run layer by layer gives the
++bits of the same prompt run chunk by chunk, states, kept states and drafter taps included, and prompts filled
++together give each one's bits alone. Synthetic layers: EXL3 trellis projections (random words, mul1), plain bf16
++GDN gates and embedding, as a real pack stores them."""
++
++from __future__ import annotations
++
++import pytest
++import torch
++
++if not torch.cuda.is_available():
++    pytest.skip("CUDA only", allow_module_level=True)
++
++from tensorfold.cuda.exl3 import prefill as exl3_prefill  # noqa: E402
++from tensorfold.cuda.exl3.linear import Exl3Linear  # noqa: E402
++from tensorfold.families.qwen3_5.cuda import prefill  # noqa: E402
++from tensorfold.families.qwen3_5.cuda.forward import State  # noqa: E402
++from tensorfold.families.qwen3_5.cuda.prefill import Piece, prefill_batch, prefill_state  # noqa: E402
++from tensorfold.families.qwen3_5.cuda.weights import GDN, Attention, Config, Exl3, Layer, Plain, Weights  # noqa: E402
++
++V = 256
++
++
++def _model(layers: int = 2) -> Weights:
++    """GDN and attention layers in turn (``layers`` of them, the pair repeated), every projection an EXL3 group."""
++
++    gen = torch.Generator().manual_seed(17)
++    ws = exl3_prefill.Workspace(fold=True)
++
++    def ex(n, k, bits=4):
++        words = torch.randint(0, 1 << 16, (k // 16, n // 16, 16 * bits), generator=gen, dtype=torch.int32)
++        suh = (torch.randn(k, generator=gen) * 0.05).half()
++        svh = (torch.randn(n, generator=gen) * 0.05).half()
++        return Exl3(Exl3Linear.from_tensors(words.to(torch.int16), suh, svh, "mul1", device="cuda"), workspace=ws)
++
++    def plain(n, k):
++        return Plain((torch.randn(n, k, generator=gen) * 0.05).to(torch.bfloat16).cuda())
++
++    norm = torch.ones(128, device="cuda", dtype=torch.bfloat16)
++    conv = (torch.randn(384, 4, generator=gen) * 0.1).to(torch.bfloat16).cuda()
++    gdn = GDN(ex(384, 128), ex(128, 128), plain(1, 128), plain(1, 128), ex(128, 128), conv,
++              torch.zeros(1, device="cuda"), torch.zeros(1, device="cuda"), norm)
++    attn = Attention(ex(2 * 2 * 128, 128), ex(128, 128), ex(128, 128), ex(128, 2 * 128), norm, norm)
++    pair = [Layer(True, norm, norm, gdn, None, ex(128, 128), ex(128, 128), ex(128, 128)),
++            Layer(False, norm, norm, None, attn, ex(128, 128), ex(128, 128), ex(128, 128))]
++    config = Config(hidden=128, intermediate=128, layers=layers, heads=2, kv_heads=1, head_dim=128, vocab=V,
++                    k_heads=1, v_heads=1, dk=128, dv=128, conv_kernel=4, interval=2, eps=1e-6, rope_dims=32,
++                    rope_theta=10000000.0, eos=(0,))
++    return Weights(config, plain(V, 128), (pair * (layers // 2))[:layers], norm, ex(V, 128, 6),
++                   torch.ones(16, device="cuda"), quant="exl3")
++
++
++@pytest.fixture(scope="module")
++def w():
++    return _model()
++
++
++def _prompt(n: int, seed: int = 0) -> list[int]:
++    g = torch.Generator().manual_seed(seed)
++    return torch.randint(1, V, (n,), generator=g).tolist()
++
++
++def _same(a: State, b: State) -> None:
++    assert a.pos == b.pos
++    for x, y in zip(a.rec, b.rec):
++        assert (x is None) == (y is None) and (x is None or torch.equal(x, y))
++    for x, y in zip(a.conv, b.conv):
++        assert (x is None) == (y is None) and (x is None or torch.equal(x, y))
++    for x, y in zip(a.kv, b.kv):
++        if x is not None:
++            assert torch.equal(x[0][:a.pos], y[0][:b.pos]) and torch.equal(x[1][:a.pos], y[1][:b.pos])
++
++
++class _Recorder:
++    """A stand-in drafter: what it was given, in order (rows between snapshots, skips)."""
++
++    window = 40
++
++    def __init__(self) -> None:
++        self.log: list = []
++
++    def skip(self, n: int) -> None:
++        self.log.append(("skip", n))
++
++    def add_taps(self, taps: torch.Tensor) -> None:
++        self.log.append(("taps", taps.clone()))
++
++    def snapshot(self):
++        self.log.append(("snap",))
++        return sum(1 for e in self.log if e[0] == "snap")
++
++    def segments(self) -> list:
++        """Taps joined between snapshots, so the two orders may hand them over in pieces of any size."""
++
++        out, rows = [], []
++        for e in self.log:
++            if e[0] == "taps":
++                rows.append(e[1])
++                continue
++            if rows:
++                out.append(("taps", torch.cat(rows)))
++                rows = []
++            out.append(e)
++        if rows:
++            out.append(("taps", torch.cat(rows)))
++        return out
++
++
++def _run(monkeypatch, w, prompt, base, keep_at, layer_major, draft=None):
++    monkeypatch.setattr(prefill, "LAYER_MAJOR", layer_major)
++    st = State(w)
++    if base:
++        prefill_state(w, prompt[:base], st, size=16)
++    out = prefill_state(w, prompt, st, size=16, keep_at=keep_at, draft=draft)
++    return out, st
++
++
++# chunks of 16 over 70 rows from 0 start at 0, 14, 28, 42, 56; from 9 at 9, 21, 33, 45, 57
++@pytest.mark.parametrize("base,keep_at", [(0, None), (0, 0), (0, 20), (0, 28), (0, 69), (0, 70), (9, None), (9, 9),
++                                          (9, 33), (9, 50)])
++def test_layer_major_prompts_equal_chunk_by_chunk(monkeypatch, w, base, keep_at):
++    prompt = _prompt(70)
++    lm, st_lm = _run(monkeypatch, w, prompt, base, keep_at, True)
++    cm, st_cm = _run(monkeypatch, w, prompt, base, keep_at, False)
++    _same(st_lm, st_cm)
++    if keep_at is None:
++        assert torch.equal(lm, cm)
++        return
++    assert torch.equal(lm[0], cm[0])
++    _same(lm[1][0], cm[1][0])
++    assert lm[1][0].pos == keep_at
++
++
++@pytest.mark.parametrize("keep_at", [None, 30, 47, 70])
++def test_layer_major_feeds_the_drafter_as_chunk_by_chunk(monkeypatch, keep_at):
++    """64 layers (the drafter taps five of them): the same taps, skips and snapshot points in both orders."""
++
++    w = _model(64)
++    prompt = _prompt(70, seed=1)
++    lm_draft, cm_draft = _Recorder(), _Recorder()
++    lm, st_lm = _run(monkeypatch, w, prompt, 0, keep_at, True, lm_draft)
++    cm, st_cm = _run(monkeypatch, w, prompt, 0, keep_at, False, cm_draft)
++    _same(st_lm, st_cm)
++    assert torch.equal(lm if keep_at is None else lm[0], cm if keep_at is None else cm[0])
++    a, b = lm_draft.segments(), cm_draft.segments()
++    assert [e[0] for e in a] == [e[0] for e in b]
++    for x, y in zip(a, b):
++        assert x[0] != "taps" or torch.equal(x[1], y[1])
++        assert x[0] != "skip" or x[1] == y[1]
++
++
++def test_layer_major_holds_no_weights_after_the_prompt(monkeypatch, w):
++    _run(monkeypatch, w, _prompt(70), 0, None, True)
++    assert exl3_prefill.SCOPE is None
++    held = [x for layer in w.layers for x in vars(layer).values() if isinstance(x, Exl3)]
++    assert held and all(getattr(x.layer, "_prompt_w", None) is None for x in held)
++
++
++def test_prompts_filled_together_equal_each_alone(w):
++    """prefill_batch on the folded EXL3 path: each piece's last row, state and kept state are its prefill alone."""
++
++    prompts = [_prompt(5, 2), _prompt(40, 3), _prompt(33, 4), _prompt(70, 5)]
++    starts = [0, 0, 12, 0]
++    keeps = [None, 17, 20, None]
++    alone = []
++    for prompt, start, keep in zip(prompts, starts, keeps):
++        st = State(w)
++        if start:
++            prefill_state(w, prompt[:start], st)
++        alone.append((prefill_state(w, prompt, st, keep_at=keep), st))
++    sts = []
++    for prompt, start in zip(prompts, starts):
++        st = State(w)
++        if start:
++            prefill_state(w, prompt[:start], st)
++        sts.append(st)
++    outs = prefill_batch(w, [Piece(p, st, keep) for p, st, keep in zip(prompts, sts, keeps)])
++    for (normed, kept, _), st, keep, (ref, ref_st) in zip(outs, sts, keeps, alone):
++        _same(st, ref_st)
++        if keep is None:
++            assert torch.equal(normed, ref)
++        else:
++            assert torch.equal(normed, ref[0])
++            _same(kept[0], ref[1][0])
+diff --git a/tests/cuda/test_qwen27_multi.py b/tests/cuda/test_qwen27_multi.py
+index 63bbef0f..6adbd771 100644
+--- a/tests/cuda/test_qwen27_multi.py
++++ b/tests/cuda/test_qwen27_multi.py
+@@ -327,6 +327,54 @@ def test_prompts_resume_a_shared_start_and_equal_fresh(monkeypatch, step):
+         assert s.cached == (len(shared) if s.prompt[:len(shared)] == shared else 0), (s.prompt, s.cached)
+ 
+ 
++
++@pytest.mark.parametrize("merge", [True, False])
++def test_a_short_tail_fills_with_its_stop_in_one_call(monkeypatch, merge):
++    """A prompt whose last stop is fewer than MIN_GAP rows from its end fills to the end in one call, its stop kept
++    from inside it: the same tokens, the same kept prefix and the same resumed replies as with two calls."""
++
++    from tensorfold.cuda import markers
++    from tensorfold.families.qwen3_5.cuda import multi
++
++    monkeypatch.setattr(multi, "TAIL_MERGE", merge)
++    monkeypatch.setattr(multi, "MIN_GAP", 4)
++    monkeypatch.setattr(markers, "MIN_GAP", 4)
++    calls = []
++    alone, together = multi.prefill_state, multi.prefill_batch
++
++    def prefill_state(w, prompt, st, **kw):
++        calls.append((st.pos, len(prompt)))
++        return alone(w, prompt, st, **kw)
++
++    def prefill_batch(w, pieces, **kw):
++        calls.extend((p.st.pos, len(p.prompt)) for p in pieces)
++        return together(w, pieces, **kw)
++
++    monkeypatch.setattr(multi, "prefill_state", prefill_state)
++    monkeypatch.setattr(multi, "prefill_batch", prefill_batch)
++    w = _model()
++    shared = [11, 12, 13, 14, 15, 16]
++    prompts = [shared + [21, 22, 23], shared + [31, 32], shared + [41, 42, 43, 44, 45]]
++    refs = {tuple(p): _serial(w, p, smp, 16) for p, smp in zip(prompts, SAMPLINGS)}
++    dec = _Oracle(w, refs, seed=7, points=_points_after(len(shared)))
++    first = Stream(prompts[0], 16, SAMPLINGS[0])
++    dec.admit(first)
++    while dec.live():
++        dec.finish(dec.round())
++    assert first.out == refs[tuple(prompts[0])] and first.cached == 0
++    assert any(e[0] == shared for e in dec.cache.entries)
++    assert calls == ([(0, 9)] if merge else [(0, 6), (6, 9)])            # one call to the end, or two
++    rest = []
++    for prompt, sampling in zip(prompts[1:], SAMPLINGS[1:]):
++        s = Stream(prompt, 16, sampling)
++        dec.admit(s)
++        rest.append(s)
++    while dec.live():
++        dec.finish(dec.round())
++    for s in rest:
++        assert s.out == refs[tuple(s.prompt)], s.prompt
++        assert s.cached == len(shared), (s.prompt, s.cached)
++
+ def test_streams_keep_decoding_while_a_prompt_prefills(monkeypatch):
+     """With streams decoding, a queued prompt prefills STEP rows a round and the others keep taking tokens."""
+ 
+diff --git a/tests/test_exl3_engines.py b/tests/test_exl3_engines.py
+index 5a90b57e..2717f5fc 100644
+--- a/tests/test_exl3_engines.py
++++ b/tests/test_exl3_engines.py
+@@ -84,6 +84,22 @@ def test_admission_counts_an_exl3_pack_as_loaded():
+     assert indexed_weights(1, True)("model.visual.merger.fc.weight", {"dtype": "BF16", "shape": [8, 8]}) == (0, 0)
+ 
+ 
++def test_admission_counts_a_layer_major_prompts_residual_stream_by_slots():
++    """A prompt of several chunks runs layer by layer, so every row's layer input and MLP output (bf16) stay live
++    between layers: the admission grows by 4 * hidden bytes a slot, and only when layer-major applies."""
++    from tensorfold.cuda.capacity import Geometry
++    from tensorfold.families.qwen3_5.cuda.exl3_load import admission
++
++    text = {"hidden_size": 5120, "intermediate_size": 17408}
++    base = Geometry(lambda slots: 1000 + 7 * slots, 64, 128)
++    plain, _ = admission(lambda _: base)
++    major, _ = admission(lambda _: base, layer_major=True)
++    for slots in (4096, 131200):
++        assert major(text).bytes_at(slots) - plain(text).bytes_at(slots) == 2 * slots * 5120 * 2
++    assert (major(text).reserve, major(text).minimum_slots) == (plain(text).reserve, plain(text).minimum_slots)
++    assert major(text).needed(131072) - plain(text).needed(131072) == 4 * 5120 * (131072 + 64)
++
++
+ @pytest.mark.parametrize("suffix", ["shard_0.trellis", "trellis"])
+ def test_extra_files_add_their_mapped_pages(tmp_path, suffix):
+     from tensorfold.cuda.capacity import estimate_weights
+
+__HERMES_CWD_1c3a39d59cb9__/volume2/Hailey/Hermes/home/.hermes__HERMES_CWD_1c3a39d59cb9__

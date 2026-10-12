@@ -1,0 +1,85 @@
+{
+  "schema": "kearuga-user-facing-benchmarks-v1",
+  "model": "0xWhiteMage/ThinkingCap-Qwen3.8-27B-Kearuga-EXL3-4.00bpw",
+  "measurement_window_utc": "2026-10-10/2026-10-11",
+  "scope": "Frozen measurements of this target on the qualified TensorFold Python-based CUDA stack. No new inference, quality scoring or performance run was performed for this model-card update.",
+  "hardware": "One NVIDIA DGX Spark, GB10 / sm_121, Linux aarch64",
+  "runtime": {
+    "engine_family": "TensorFold Python-based CUDA",
+    "target_kv": "BF16",
+    "parallel": 16,
+    "context_tokens": 262144,
+    "drafter": "External stock DFlash 2 from Inco AI, mirrored by z-lab",
+    "baseline": "Previous TensorFold-based serving stack using the same quantized target and stock drafter",
+    "availability": "Model weights only. The measured runtime and drafter are separate; a generic latest-engine installation is not a certified reproduction."
+  },
+  "weights": {
+    "safetensors_shards": 2,
+    "bytes": 16349981188,
+    "decimal_GB": 16.349981188,
+    "nominal_decoder_bpw": 4.0,
+    "storage_is_not_runtime_memory": true
+  },
+  "fidelity": {
+    "reference_model": "bottlecapai/ThinkingCap-Qwen3.8-27B",
+    "reference_revision": "4bd4e11054e4ceb0dcecfff2f0d2ffa906f37232",
+    "reference_precision": "BF16",
+    "suite": "Internal G3-v2 held-out text suite",
+    "method": "Teacher-forced KL on fixed reference top-20 tokens plus an other-token bucket; coarsened, not full-vocabulary KL",
+    "prompts": 240,
+    "positions": 25780,
+    "mean_kl": 0.005173611168202373,
+    "pooled_position_p99_kl": 0.06194665492818444,
+    "maximum_position_kl": 1.880046735502513,
+    "top1_agreement": 0.9778630064719872,
+    "tool_domain_mean_kl": 0.005387605209294089,
+    "limitations": "Not BF16-lossless, free-running answer equivalence, full tool-benchmark certification, or a direct comparison to KL values from a different test/reference."
+  },
+  "throughput": {
+    "c1_c4_conditions": "50-prompt battery across five domains, two runs per boot and two boots per stack; thinking enabled, reasoning_effort=xhigh, model-default sampling, 1024-token output cap",
+    "c8_c16_conditions": "Greedy descriptive screen; not a powered claim of universal speed superiority",
+    "rows": [
+      {"label": "Single request", "metric": "Per-request net decode tok/s, TTFT excluded", "previous": 59.426712162126925, "current": 60.60735670562721},
+      {"label": "4 concurrent requests", "metric": "Aggregate completion tok/s, total cell output divided by cell wall time", "previous": 124.76299729086345, "current": 137.59096580807915},
+      {"label": "8 concurrent requests", "metric": "Aggregate completion tok/s, greedy descriptive", "previous": 167.976, "current": 214.8755},
+      {"label": "16 concurrent requests", "metric": "Aggregate completion tok/s, greedy descriptive", "previous": 181.914, "current": 249.54500000000002}
+    ],
+    "cold_long_prompt_median_ttft_s": {"previous": 10.535, "current": 7.448},
+    "limitations": "Same target and drafter in both arms; gains are serving-stack results, not an isolated quantization effect, BF16 speed comparison, or SGLang comparison. C1 net decode and concurrent aggregate are different metrics. Output caps can truncate reasoning; these cells do not measure completed-task accuracy."
+  },
+  "reasoning_task_attempts": {
+    "suite": "Internal Hard-V2-R: 30 AIME 2025 problems and a fixed 40-problem MATH-500 Level-5 sample",
+    "repeats": 3,
+    "conditions": "Four concurrent requests, thinking enabled, reasoning_effort=xhigh, model-default sampling",
+    "output_caps": {"aime25": 24576, "math500_l5": 16384},
+    "aggregation": "Arithmetic mean of the three existing per-run means. Each run uses the same number of problems. Wrong and capped attempts remain included; not a successful-task-only latency statistic.",
+    "wall_time_rows": [
+      {"label": "MATH-500 Level-5 sample", "problems_per_run": 40, "previous_mean_s": 46.10346233333333, "current_mean_s": 40.16845566666667, "observed_change_percent": -12.873234170041037, "previous_run_means_s": [44.285691, 50.030018, 43.994678], "current_run_means_s": [36.294983, 45.316174, 38.89421]},
+      {"label": "AIME 2025", "problems_per_run": 30, "previous_mean_s": 301.74468333333334, "current_mean_s": 291.8302926666667, "observed_change_percent": -3.285688601748893, "previous_run_means_s": [315.041262, 278.369542, 311.823246], "current_run_means_s": [290.809282, 286.428536, 298.25306]},
+      {"label": "Combined reasoning suite", "problems_per_run": 70, "previous_mean_s": 155.66398566666666, "current_mean_s": 148.02352866666666, "observed_change_percent": -4.9083010224092565, "previous_run_means_s": [160.323793, 147.889814, 158.77835], "current_run_means_s": [145.372539, 148.650044, 150.048003]}
+    ],
+    "quality": {"previous_mean_correct_of_70": 60.0, "current_mean_correct_of_70": 62.0, "verdict": "Registered non-inferiority pass, not proof of general superiority"},
+    "aime_cap_hits_per_run": {"previous": [7, 6, 6], "current": [6, 6, 5]},
+    "math_cap_hits_per_run": {"previous": [0, 0, 0], "current": [0, 0, 0]},
+    "mean_reasoning_tokens_per_attempt": {"previous": 5095.352381, "current": 5131.985714333333, "additional_reduction_claimed": false},
+    "limitations": "Descriptive timing summaries, not a preregistered task-latency win or a guarantee for arbitrary tasks. The current stack does not show an additional reasoning-token reduction on this suite."
+  },
+  "upstream_thinkingcap_context": {
+    "claim_owner": "BottleCap AI",
+    "scope": "Publisher-reported BF16 ThinkingCap versus base Qwen results, NOT measurements of this Kearuga EXL3 release",
+    "source_card_revision": "7891e03dbda2e9b63a5b9610f20e83ea441f8e2c",
+    "source_card_url": "https://huggingface.co/bottlecapai/ThinkingCap-Qwen3.8-27B/blob/7891e03dbda2e9b63a5b9610f20e83ea441f8e2c/README.md",
+    "hardware_runtime": "NVIDIA H200, vLLM 0.29.0; thinking at xhigh and recommended model-default sampling",
+    "macro_average_reasoning_token_reduction_percent": 37.2,
+    "macro_average_base_accuracy_percent": 86.6,
+    "macro_average_thinkingcap_accuracy_percent": 85.8,
+    "macro_average_definition": "Equal-weight mean of per-benchmark token reductions; not the ratio of aggregate mean token counts",
+    "selected_publisher_rows": [
+      {"benchmark": "GPQA-Diamond", "base_accuracy_percent": 89.93, "thinkingcap_accuracy_percent": 88.04, "base_mean_thinking_tokens": 12772, "thinkingcap_mean_thinking_tokens": 7267, "token_reduction_percent": 43.1},
+      {"benchmark": "AIME 2026", "base_accuracy_percent": 98.13, "thinkingcap_accuracy_percent": 94.27, "base_mean_thinking_tokens": 15663, "thinkingcap_mean_thinking_tokens": 10934, "token_reduction_percent": 30.2},
+      {"benchmark": "LiveCodeBench v6", "base_accuracy_percent": 91.14, "thinkingcap_accuracy_percent": 91.21, "base_mean_thinking_tokens": 28395, "thinkingcap_mean_thinking_tokens": 22645, "token_reduction_percent": 20.3},
+      {"benchmark": "AA-LCR", "base_accuracy_percent": 81.75, "thinkingcap_accuracy_percent": 84.0, "base_mean_thinking_tokens": 2550, "thinkingcap_mean_thinking_tokens": 1565, "token_reduction_percent": 38.6},
+      {"benchmark": "IFBench", "base_accuracy_percent": 79.75, "thinkingcap_accuracy_percent": 79.71, "base_mean_thinking_tokens": 7961, "thinkingcap_mean_thinking_tokens": 4266, "token_reduction_percent": 46.4}
+    ]
+  }
+}

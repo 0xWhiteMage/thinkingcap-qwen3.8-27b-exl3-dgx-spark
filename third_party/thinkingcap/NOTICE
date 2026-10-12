@@ -1,0 +1,16 @@
+ThinkingCap
+Copyright 2026 BottleCap AI
+
+This distribution includes ThinkingCap model weights and associated materials
+from BottleCap AI, licensed under PolyForm Small Business License 1.0.0
+(with BottleCap AI's additional personal-use permission stated in LICENSE).
+
+ThinkingCap is derived from Qwen model materials by Alibaba Cloud / Qwen Team.
+Those upstream materials are licensed under the Apache License, Version 2.0
+https://www.apache.org/licenses/LICENSE-2.0
+The full upstream license text is retained in LICENSE-Apache-2.0-Qwen.txt.
+
+You must retain all copyright, patent, trademark, and attribution notices
+from the upstream Qwen distribution as required by Apache-2.0.
+
+Base checkpoint: Qwen/Qwen3.8-27B (https://huggingface.co/Qwen/Qwen3.8-27B)

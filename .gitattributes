@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.png -text
+# Unified-diff context lines contain a required single space on blank lines.
+*.patch text eol=lf -whitespace

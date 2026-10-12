@@ -1,0 +1,6 @@
+diff --git a/src/tensorfold/families/qwen3_5/cuda/multi.py b/src/tensorfold/families/qwen3_5/cuda/multi.py
+--- a/src/tensorfold/families/qwen3_5/cuda/multi.py
++++ b/src/tensorfold/families/qwen3_5/cuda/multi.py
+@@ -30 +30 @@
+-DEPTH_CHIPS = ((12, 0),)                # tuned planning (measured overhead, curve steps, the block); else 0.6.0's
++DEPTH_CHIPS = ((12, 0), (12, 1))               # tuned planning (measured overhead, curve steps, the block); else 0.6.0's

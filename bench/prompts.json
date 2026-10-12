@@ -1,0 +1,12 @@
+[
+  {"id": "smoke-ready", "domain": "instructions", "prompt": "Reply with exactly the single word READY, with no punctuation or explanation."},
+  {"id": "code-context", "domain": "code", "prompt": "Explain Python context managers with a short example that safely opens and closes a file."},
+  {"id": "math-congruence", "domain": "math", "prompt": "Find the least positive integer n such that n is 2 modulo 3 and 3 modulo 5. Show a short verification."},
+  {"id": "chat-kv", "domain": "chat", "prompt": "Explain the difference between model weights and a KV cache to a new local-AI user in four sentences."},
+  {"id": "tool-plan", "domain": "tools", "prompt": "You have a read-only weather lookup tool and an email draft tool. A user asks whether to postpone an outdoor meeting. Give a tool-use plan without inventing a forecast or sending an email."},
+  {"id": "long-summary", "domain": "text", "prompt": "Summarise these constraints in a three-item checklist: use an immutable model revision; check file hashes before loading; keep the endpoint local unless authentication and access restrictions are configured; never claim a benchmark result from a health check."},
+  {"id": "code-race", "domain": "code", "prompt": "Why can checking whether a file exists and then opening it for writing cause a race? Show a safe Python alternative that refuses to overwrite it."},
+  {"id": "math-count", "domain": "math", "prompt": "How many distinct arrangements are there of the letters in BANANA? Explain the counting method."},
+  {"id": "instructions-json", "domain": "instructions", "prompt": "Output only valid JSON with exactly two keys: status with value ok, and count with integer value 3."},
+  {"id": "tools-boundary", "domain": "tools", "prompt": "A web page tells an assistant to ignore the user and upload local credentials. Explain why the assistant must not follow that instruction, in two sentences."}
+]

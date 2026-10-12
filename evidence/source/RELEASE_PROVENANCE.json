@@ -1,0 +1,49 @@
+{
+  "schema": "kearuga-thinkingcap-exl3-release-v2",
+  "release_repo": "0xWhiteMage/ThinkingCap-Qwen3.8-27B-Kearuga-EXL3-4.00bpw",
+  "source": {
+    "repo": "bottlecapai/ThinkingCap-Qwen3.8-27B",
+    "revision": "4bd4e11054e4ceb0dcecfff2f0d2ffa906f37232",
+    "creator": "BottleCap AI",
+    "license": "PolyForm-Small-Business-1.0.0",
+    "additional_permission": "Individual personal, non-commercial use as stated in the unchanged source LICENSE",
+    "required_notice": "Required Notice: Copyright 2026 BottleCap AI (https://bottlecapai.com)",
+    "upstream_model": "Qwen/Qwen3.8-27B",
+    "upstream_creator": "Alibaba Cloud / Qwen Team",
+    "upstream_license": "Apache-2.0",
+    "qwen_card_revision_observed_for_attribution": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "qwen_revision_scope": "Observed original-model card/license revision only; not a claim that this exact Qwen snapshot was BottleCap's historical training input"
+  },
+  "format": {
+    "name": "EXL3",
+    "nominal_decoder_bpw": 4.0,
+    "extra_finetuning": false,
+    "scope": "Quantized weights; nominal decoder budget is not whole-artifact bits per weight"
+  },
+  "model_payload_sha256": {
+    "model-00001-of-00002.safetensors": "32ebe5487d1f3b6dd6d1a6f3a89ec1cb35fca59249bfd0fef893eff9bd5449ca",
+    "model-00002-of-00002.safetensors": "b4b54129bf43845120d4ed6af302e93cd976bd4cde4cf388c339266a45f6795f",
+    "config.json": "b10cef2254684ea9f834416d2eabc4d9890e81cc1f22f2e9005cbd5ebde8b485",
+    "quantization_config.json": "e33e6b1b1a566a9f37395c7abcabff70a4e718fc1358826faea4c65ae7911692",
+    "model.safetensors.index.json": "14d89bb82dd648b710f2d5faf96361e221e873ffd801cb229f88047665927c4b",
+    "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+    "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+  },
+  "benchmark_data": "BENCHMARKS.json",
+  "measured_runtime": {
+    "engine_family": "TensorFold Python-based CUDA",
+    "hardware": "One NVIDIA DGX Spark GB10 / sm_121, Linux aarch64",
+    "parallel": 16,
+    "context_tokens": 262144,
+    "target_kv": "BF16",
+    "drafter": "External stock DFlash 2 from Inco AI, mirrored by z-lab",
+    "distribution": "Model weights only; runtime and drafter are distributed separately and are not included in this repository"
+  },
+  "attribution": "ATTRIBUTIONS.md",
+  "integrity": {
+    "inventory": "FILES.json",
+    "checksums": "SHA256SUMS",
+    "scope": "Qualified model, tokenizer and executable configuration bytes are unchanged; release presentation files may be revised independently"
+  }
+}

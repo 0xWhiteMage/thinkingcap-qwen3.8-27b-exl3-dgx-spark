@@ -1,0 +1,28 @@
+ThinkingCap
+Copyright 2026 BottleCap AI
+
+Licensed under the PolyForm Small Business License 1.0.0
+https://polyformproject.org/licenses/small-business/1.0.0
+SPDX-License-Identifier: PolyForm-Small-Business-1.0.0
+
+Required Notice: Copyright 2026 BottleCap AI (https://bottlecapai.com)
+
+Additional permission (personal use):
+In addition to the rights granted under the PolyForm Small Business License 1.0.0,
+BottleCap AI grants you a copyright and patent license to use ThinkingCap
+(including the distributed weights and associated materials) for personal,
+non-commercial purposes as an individual, free of charge, subject to the same
+notices, patent-defense, violations, and no-liability terms as in PolyForm
+Small Business License 1.0.0.
+
+Commercial use by organizations that do not qualify as a "Small Business"
+under PolyForm Small Business License 1.0.0 requires a separate commercial
+license from BottleCap AI.
+
+Upstream:
+ThinkingCap incorporates materials from Qwen licensed under Apache License 2.0.
+See NOTICE for upstream copyright and license notices. Apache-2.0 terms continue
+to apply to those upstream materials.
+
+The full text of PolyForm Small Business License 1.0.0 is included in
+LICENSE-PolyForm-Small-Business-1.0.0.txt (or at the URL above).

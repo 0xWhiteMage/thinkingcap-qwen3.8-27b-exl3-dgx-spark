@@ -1,0 +1,146 @@
+{
+  "repo": "0xWhiteMage/ThinkingCap-Qwen3.8-27B-Kearuga-EXL3-4.00bpw",
+  "revision": "d6df32faa6a8109542b2d5e006d2a09312955905",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "size": 1751,
+      "git_blob_sha1": "6bc5bed15b10024f5e62c21a4088b5361843e85b"
+    },
+    {
+      "path": "ATTRIBUTIONS.md",
+      "size": 2665,
+      "git_blob_sha1": "238987891d55567cd20cfd1a7131e3e9c499eda5"
+    },
+    {
+      "path": "BENCHMARKS.json",
+      "size": 7421,
+      "git_blob_sha1": "a05ead3bb6feb9e77bb513c6b4fdc666b726ac5d"
+    },
+    {
+      "path": "FILES.json",
+      "size": 3822,
+      "git_blob_sha1": "de5a47bcf481e731da1dadae5e7fa725f077bbde"
+    },
+    {
+      "path": "LICENSE",
+      "size": 1260,
+      "git_blob_sha1": "c6b9bd63c53617824c27b53b3a4d5bac7ecae3ac"
+    },
+    {
+      "path": "LICENSE-Apache-2.0-Qwen.txt",
+      "size": 11343,
+      "git_blob_sha1": "1d5180a42f1c3383ba7c7bd0a50f0837ef0168df"
+    },
+    {
+      "path": "LICENSE-PolyForm-Small-Business-1.0.0.txt",
+      "size": 4389,
+      "git_blob_sha1": "7e0a4b69b71b860912c0945237cf62860d017a50"
+    },
+    {
+      "path": "NOTICE",
+      "size": 757,
+      "git_blob_sha1": "ced5b77f44546449a24630eb7703026734250135"
+    },
+    {
+      "path": "README.md",
+      "size": 15929,
+      "git_blob_sha1": "5ff8a8adfe951d882f219e195f4b40f230941ebf"
+    },
+    {
+      "path": "RELEASE_PROVENANCE.json",
+      "size": 2699,
+      "git_blob_sha1": "b5dfba1f157dbfa8a75393fadbac3c49550ce388"
+    },
+    {
+      "path": "SHA256SUMS",
+      "size": 2253,
+      "git_blob_sha1": "4939aaa86a6f13062e0f7a9bd68993af79b85036"
+    },
+    {
+      "path": "SOURCE.json",
+      "size": 263,
+      "git_blob_sha1": "03140895a5d05ab8065a0cd97efe3ff4775954db"
+    },
+    {
+      "path": "assets/header.png",
+      "size": 497429,
+      "sha256": "1a5d23832f75eff8a3da663300d0b4435432061b65f6da4d58c0b826a58c5f88"
+    },
+    {
+      "path": "assets/serving-performance.png",
+      "size": 577801,
+      "sha256": "d2411dc182b0dd92a559b98866f6e01b4a163604879915b7b9bede866acd88b2"
+    },
+    {
+      "path": "assets/task-latency.png",
+      "size": 552243,
+      "sha256": "bef2685941c36bb51d4974c083e8227b4fe3786585511beba23d8bdffde25b9e"
+    },
+    {
+      "path": "chat_template.jinja",
+      "size": 8952,
+      "git_blob_sha1": "c0c686f9c38d70d179fb7b5f5aa7530bc913dda3"
+    },
+    {
+      "path": "config.json",
+      "size": 4647,
+      "git_blob_sha1": "e198de6042004e8994bfc8c8527d9e6475af0fa5"
+    },
+    {
+      "path": "generation_config.json",
+      "size": 202,
+      "git_blob_sha1": "023756cfadf88e5bf69eefeee3e172f38c448d64"
+    },
+    {
+      "path": "merges.txt",
+      "size": 3353259,
+      "git_blob_sha1": "a494e019ca1502219fd0128658b979e5f05ae8e8"
+    },
+    {
+      "path": "model-00001-of-00002.safetensors",
+      "size": 8396212225,
+      "sha256": "32ebe5487d1f3b6dd6d1a6f3a89ec1cb35fca59249bfd0fef893eff9bd5449ca"
+    },
+    {
+      "path": "model-00002-of-00002.safetensors",
+      "size": 7953768963,
+      "sha256": "b4b54129bf43845120d4ed6af302e93cd976bd4cde4cf388c339266a45f6795f"
+    },
+    {
+      "path": "model.safetensors.index.json",
+      "size": 295620,
+      "git_blob_sha1": "a4d086f6a9535d1ad436f0483e1bc5fa8b120133"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "size": 390,
+      "git_blob_sha1": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+    },
+    {
+      "path": "quantization_config.json",
+      "size": 629067,
+      "git_blob_sha1": "aec9e9e9dca2743e954f888e7e54959ac4e5a9ef"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 12809320,
+      "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size": 17928,
+      "git_blob_sha1": "5de744b3fca2129d7186979ae47c06be33903243"
+    },
+    {
+      "path": "video_preprocessor_config.json",
+      "size": 385,
+      "git_blob_sha1": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+    },
+    {
+      "path": "vocab.json",
+      "size": 6722759,
+      "git_blob_sha1": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+    }
+  ]
+}

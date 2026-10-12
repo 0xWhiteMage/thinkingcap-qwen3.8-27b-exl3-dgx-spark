@@ -1,0 +1,31 @@
+{
+  "repo": "z-lab/Qwen3.8-27B-DFlash2",
+  "revision": "50307d4c4cde6860d4eee73e2547cd786fe8e8a4",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "size": 1581,
+      "git_blob_sha1": "50bbb90c56f7da6c41ef378fa235a891daf5a238"
+    },
+    {
+      "path": "README.md",
+      "size": 5397,
+      "git_blob_sha1": "1ee0eb2b2f81767f40521b61245211e5400b81bc"
+    },
+    {
+      "path": "assets/dflash2-figure.png",
+      "size": 286889,
+      "sha256": "6d8dcc9a9472bddb644c881fe83050b5343d09bf5ffb0912e5598e55fe671e99"
+    },
+    {
+      "path": "config.json",
+      "size": 1239,
+      "git_blob_sha1": "79279cc5665bced6f3cdaa2095a2ffe819497b2e"
+    },
+    {
+      "path": "model.safetensors",
+      "size": 3848817896,
+      "sha256": "67fc76d68dc5a9415511a4f394ef744d67510cd20e93b37cc2cc7d28e4bab65c"
+    }
+  ]
+}
