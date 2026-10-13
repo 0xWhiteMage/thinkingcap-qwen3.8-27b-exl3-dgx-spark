@@ -1,0 +1,19 @@
+{
+  "image": {
+    "image_id": "sha256:03c46d1391b5edc8f399bcc89b39277430b0cc6930689ea9779b1612d696a9b5",
+    "architecture": "amd64",
+    "os": "linux",
+    "build_created": "2026-10-13T13:56:26.615103361+08:00"
+  },
+  "architecture_cubins": {
+    "command": "docker run --rm --entrypoint /usr/local/cuda/bin/cuobjdump -v /volume2/Hailey/Hermes/home/.hermes/cache/scratch:/compile-cache:ro thinkingcap-exl3:0.2.0 --list-elf /compile-cache/recipe_exl3_sm86_sm89_compile_probe/recipe_exl3_sm86_sm89_compile_probe.so",
+    "exit_code": 0,
+    "output": "ELF file    1: recipe_exl3_sm86_sm89_compile_probe.1.sm_86.cubin\nELF file    2: recipe_exl3_sm86_sm89_compile_probe.2.sm_89.cubin"
+  },
+  "no_gpu_guard": {
+    "command": "docker run --rm --entrypoint python3 -v /volume2/Hailey/Hermes/workspace/thinkingcap-qwen3.8-27b-exl3-dgx-spark/scripts/capacity_check.py:/capacity_check.py:ro thinkingcap-exl3:0.2.0 /capacity_check.py --model /models/target --live",
+    "exit_code": 1,
+    "output": "Expose exactly one CUDA GPU to the capacity check."
+  },
+  "scope": "Image build, architecture compilation and missing-GPU refusal only; no RTX cold start, inference or measured fit"
+}

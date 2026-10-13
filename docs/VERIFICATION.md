@@ -7,6 +7,10 @@
 | Pinned target download, sizes and hashes | All 28 manifest files verified | Published snapshot, not re-quantisation |
 | Pinned drafter download, sizes and hashes | All 5 manifest files verified | Stock checkpoint, not a custom drafter |
 | ARM64 Docker build on a real DGX Spark | Passed | CUDA base, exact source fetch, patch hashes/tree, install, Python compilation and serving CLI |
+| AMD64 Docker build | Passed | Same pinned CUDA index/source; image builds and CLI works, not GPU execution |
+| EXL3 linear extension for SM 8.6 / 8.9 | Compiled, linked and CPU-loaded; both architecture cubins inspected | Not RTX kernel execution, whole-runtime CUDA qualification or measured fit |
+| Live preflight without an exposed GPU | Refuses before reading/loading model weights | Missing-device guard, not a real-card free-memory test |
+| Exact-runtime 24 GiB header-capacity calculation | Default 20 GiB budget refuses all tested contexts; ideal 22 GiB override admits 8,192 | Header/source estimate only; no GPU exposed and no weights allocated |
 | Installed source/data comparison with the qualified resident runtime | All 456 files match after CRLF-to-LF normalisation | Not raw-byte or Docker image-ID equality |
 | Live thinking-off smoke | Final content `READY`, zero errors and zero cap hits | One short API request, not a speed/quality qualification |
 | Live thinking-on C4 smoke | Four final answers, zero errors and zero cap hits | New public diagnostic prompts, not the historical battery |
@@ -22,6 +26,8 @@ The smoke requests used the existing resident qualified runtime. **It was not st
 - [Thinking-on C4 stream receipt](../evidence/smoke-thinking-c4.json)
 - [Historical source measurements](../evidence/source/BENCHMARKS.json)
 - [Historical release provenance](../evidence/source/RELEASE_PROVENANCE.json)
+- [24 GiB header/source estimates](../evidence/24gb-header-estimates.json)
+- [x86 image, compiled architecture cubins and missing-GPU guard](../evidence/x86-build-and-kernels.json)
 
 Live receipts contain server-reported usage, actual reasoning/final output, finish reasons and observed timings. Their aggregate speed is deliberately **not promoted to a headline benchmark**; the READY request is only two completion tokens and the four prompts have short, unequal replies.
 
@@ -31,6 +37,7 @@ Live receipts contain server-reported usage, actual reasoning/final output, fini
 python3 -m unittest discover -s tests -v
 python3 -m compileall -q scripts tests
 python3 scripts/serve.py --dry-run
+python3 scripts/serve.py --profile cuda24 --dry-run
 python3 scripts/artifacts.py --verify-only
 ```
 

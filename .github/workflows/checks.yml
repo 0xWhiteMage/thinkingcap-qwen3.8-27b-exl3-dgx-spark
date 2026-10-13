@@ -18,4 +18,6 @@ jobs:
       - name: Byte compilation
         run: python -m compileall -q scripts tests
       - name: Inspect launcher without Docker or GPU
-        run: python scripts/serve.py --dry-run
+        run: |
+          python scripts/serve.py --dry-run
+          python scripts/serve.py --profile cuda24 --dry-run

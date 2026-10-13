@@ -3,9 +3,14 @@
   "pr260_final": "f956850e4a4c701daf6ab91fbce139f4e63d46f0",
   "rebased_source_commit": "a97861fb7fff56670fe098cd8f5fbdba04099558",
   "rebased_source_tree": "0c59cc48df1ad49957ce7e56d039f205d905f7f3",
-  "base_image": "nvcr.io/nvidia/pytorch@sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3",
+  "base_image": "nvcr.io/nvidia/pytorch@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c",
+  "base_manifests": {
+    "linux/arm64": "sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3",
+    "linux/amd64": "sha256:957c0efe3102b45e5b430625b64b3fe131c49013729af0c34f5c71e906d3cf77"
+  },
   "historical_runtime_image_id": "sha256:0c90a6791d91fc30898213bccaeb97236652ac1ada63ad1331bf1dcb3917ff5f",
-  "platform": "linux/arm64",
+  "qualified_platform": "linux/arm64",
+  "experimental_platform": "linux/amd64",
   "torch": "2.13.0a0+9186a08b2c.nv26.7.59513937",
   "triton": "3.7.1+gitf797708c.nv26.7",
   "note": "Local Docker image ID is provenance, not a public pull digest. Fresh builds need not have the same image ID."

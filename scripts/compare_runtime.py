@@ -20,7 +20,7 @@ print(json.dumps({str(f.relative_to(p)):digest(f)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--container', required=True)
-    parser.add_argument('--image', default='thinkingcap-exl3:0.1.0')
+    parser.add_argument('--image', default='thinkingcap-exl3:0.2.0')
     parser.add_argument('--normalise-line-endings', action='store_true',
                         help='Compare source text after CRLF-to-LF normalisation; not byte equivalence')
     args = parser.parse_args()

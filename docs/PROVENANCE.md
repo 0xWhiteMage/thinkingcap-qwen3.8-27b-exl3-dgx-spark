@@ -20,7 +20,7 @@ The contribution is [BHCC2025 / BHCC Spark Lab's PR #260](https://github.com/ash
 
 `patches/0002-gb10-depth-planning.patch` changes only `DEPTH_CHIPS` to admit SM 12.1 to the existing planner, alongside SM 12.0. It is the same one-line source change used in the resident depth121 build. It does not replace TensorFold's planner with a new Kearuga planner.
 
-The base is the linux/arm64 image manifest for NVIDIA PyTorch 26.07, pinned by digest. Runtime Python dependency versions were read from the resident environment, including their active dependency closure. PyTorch and Triton stay in the NVIDIA base; the build checks their observed versions instead of installing different wheels. The resulting Docker image can have a different image ID because build metadata, source line endings and installation paths differ.
+The base is the multi-architecture image index for NVIDIA PyTorch 26.07, pinned by digest. Its ARM64 child is the same fixed manifest used by the original Spark build; its AMD64 child is pinned in the runtime manifest too. Runtime Python dependency versions were read from the resident environment, including their active dependency closure. PyTorch and Triton stay in the NVIDIA base; the build checks their observed versions instead of installing different wheels. The resulting Docker image can have a different image ID because build metadata, source line endings and installation paths differ. An AMD64 build is not a 24 GB inference qualification.
 
 ## Existing recipes used as references
 

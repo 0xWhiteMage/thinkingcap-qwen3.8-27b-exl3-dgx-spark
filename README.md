@@ -2,23 +2,33 @@
 
 ![Kearuga — ThinkingCap Qwen3.8 27B](assets/header.png)
 
-# ThinkingCap EXL3 on DGX Spark
+# ThinkingCap EXL3 · DGX Spark & 24 GB NVIDIA GPUs
 
-**Compact weights. Efficient reasoning. A pinned, buildable serving stack.**
+**Compact weights. Efficient reasoning. Pinned TensorFold CUDA for Spark and experimental 24 GB GPU qualification.**
 
 [![Hardware](https://img.shields.io/badge/DGX_Spark-GB10-76b900)](#requirements)
+[![24 GB GPUs](https://img.shields.io/badge/24_GB_NVIDIA-experimental-d69e2e)](#24-gb-nvidia-gpus)
 [![Format](https://img.shields.io/badge/EXL3-4.00_bpw-7854d8)](#the-stack)
 [![Runtime](https://img.shields.io/badge/TensorFold-Python_CUDA-275cbd)](#the-stack)
 [![Weights](https://img.shields.io/badge/Hugging_Face-weights-ffd21e)](https://huggingface.co/0xWhiteMage/ThinkingCap-Qwen3.8-27B-Kearuga-EXL3-4.00bpw)
-[![Tests](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-dgx-spark/actions/workflows/checks.yml/badge.svg)](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-dgx-spark/actions/workflows/checks.yml)
+[![Tests](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda/actions/workflows/checks.yml/badge.svg)](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda/actions/workflows/checks.yml)
+[![Follow on X](https://img.shields.io/badge/X-@0xWhiteMage-000000?logo=x&logoColor=white)](https://x.com/0xWhiteMage)
+[![Donate on Ko-fi](https://img.shields.io/badge/Ko--fi-Donate-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/0xwhitemage)
 
-[Why this recipe](#why-this-recipe) · [The stack](#the-stack) · [Results](#measured-results) · [Quick start](#quick-start) · [API](#use-the-api) · [Reproducibility](#reproducibility-boundaries) · [Credits](#credits-and-licences)
+[Why this recipe](#why-this-recipe) · [The stack](#the-stack) · [Spark results](#measured-results) · [Spark quick start](#quick-start) · [24 GB GPUs](#24-gb-nvidia-gpus) · [API](#use-the-api) · [Reproducibility](#reproducibility-boundaries) · [Credits](#credits-and-licences)
 
 </div>
 
 ---
 
-Run **BottleCap AI's ThinkingCap-Qwen3.8-27B**, quantised as the **Kearuga EXL3 4.00bpw release**, behind a local OpenAI-compatible endpoint on one NVIDIA DGX Spark. This recipe pins the model and stock DFlash 2 drafter, rebuilds the TensorFold Python CUDA runtime from public source plus credited patches, and checks the bytes before loading them.
+Serve **BottleCap AI's ThinkingCap-Qwen3.8-27B**, quantised as the **Kearuga EXL3 4.00bpw release**, through TensorFold's local OpenAI-compatible CUDA endpoint. This recipe provides the measured **DGX Spark profile** and a separate, guarded **24 GB NVIDIA qualification path**. It pins model inputs, rebuilds the Python CUDA runtime from public source plus credited patches, and checks the bytes before loading them.
+
+> **24 GB is experimental, not qualified support.** The x86-64 image builds, but the pinned runtime's default loading-admission estimate exceeds a 24 GiB card's default budget. Read the [24 GB guide](docs/24GB-GPUS.md) before attempting it. All throughput figures below are **Spark-only**.
+
+| Your hardware | Start here | Current status |
+| --- | --- | --- |
+| DGX Spark / GB10, 128 GB unified memory | [Spark quick start](#quick-start) | Measured serving profile; historical Spark benchmarks retained |
+| RTX 3090 / RTX 4090-class, 24 GB discrete VRAM | [24 GB NVIDIA GPU guide](docs/24GB-GPUS.md) | Experimental one-GPU path; x86 build and Ampere/Ada EXL3 compilation verified, cold start and fit not qualified |
 
 | Weight storage | Mean KL vs ThinkingCap BF16 | Single-request net decode | 16-request aggregate throughput |
 | :---: | :---: | :---: | :---: |
@@ -32,6 +42,7 @@ Run **BottleCap AI's ThinkingCap-Qwen3.8-27B**, quantised as the **Kearuga EXL3 
 - **Use one Spark for shared serving.** The recorded stack improved C16 aggregate throughput from 181.91 to 249.55 tok/s using the same target and stock drafter. The gain belongs to the full serving stack, not quantisation alone.
 - **Avoid moving dependencies.** EXL3 support here lives in TensorFold's Python CUDA branch. Installing native TensorFold 1.x, SGLang or vLLM is not an equivalent route to this checkpoint.
 - **Build from auditable inputs.** The Dockerfile validates the patched source tree; the downloader validates every pinned snapshot file; the API probe refuses to turn missing token usage or server errors into a speed result.
+- **Inspect the 24 GB boundary honestly.** A one-lane, no-drafter profile checks real free memory before launch; header estimates and architecture builds are not presented as measured RTX support.
 
 This is a **serving recipe for the published EXL3 weights**, not a new ThinkingCap fine-tune or a BF16-to-EXL3 conversion/calibration recipe.
 
@@ -41,10 +52,11 @@ This is a **serving recipe for the published EXL3 weights**, not a new ThinkingC
 OpenAI-compatible client
         │
         ▼
-TensorFold Python CUDA server · 16 lanes · native 262,144-token window
+TensorFold Python CUDA server
         │
         ├── ThinkingCap → Kearuga EXL3 target · nominal 4.00 decoder bpw
-        ├── Stock Inco AI / z-lab DFlash 2 drafter · pinned independently
+        ├── Spark: 16 lanes · 262,144-token window · stock DFlash 2
+        ├── cuda24: experimental · 1 lane · ≤8,192 tokens · no drafter
         ├── BHCC2025 PR #260 EXL3 CUDA / prefill changes
         └── GB10 depth-planning admission · SM 12.1 enabled
 ```
@@ -58,16 +70,11 @@ TensorFold Python CUDA server · 16 lanes · native 262,144-token window
 | TensorFold base | `ed78d6fc204d89d90b045bf033d6551e7714f3a1` | Upstream Python CUDA implementation; package version reports 0.6.6 |
 | EXL3 changes | [BHCC2025's PR #260](https://github.com/ashhart/TensorFold/pull/260), vendored as a rebased patch | Prompt, multi-row verify and capacity changes; PR is closed, not merged |
 | GB10 planning | [`0002-gb10-depth-planning.patch`](patches/0002-gb10-depth-planning.patch) | Enables the existing depth planner for SM 12.1, alongside SM 12.0 |
-| CUDA base | NVIDIA PyTorch `26.07-py3`, **linux/arm64 manifest digest** | PyTorch, Triton and CUDA build environment; digest in [runtime manifest](manifests/runtime.json) |
-| Serving profile | BF16 target KV, `--parallel 16`, `--context 262144` | Text-only qualification; model-default sampling is sent per request |
+| CUDA base | NVIDIA PyTorch `26.07-py3`, **pinned multi-architecture index** | Fixed linux/arm64 and linux/amd64 child manifests; digests in [runtime manifest](manifests/runtime.json) |
+| Spark serving profile | BF16 target KV, `--parallel 16`, `--context 262144` | Text-only qualification; model-default sampling is sent per request |
+| Experimental discrete-GPU profile | BF16 KV, one lane, ≤8,192 context, no drafter | Guarded 24 GB attempt, not measured cold-start or inference support |
 
-The runtime loads the pinned stock drafter with TensorFold's **4-bit drafter-linear setting** (`--drafter-bits 4`). The stock downloaded checkpoint remains unchanged. No FP8 prompt option, KV quantisation, vision or alternative drafter is enabled by this launcher.
-
-### Relationship to the other recipes
-
-This follows the measured-recipe structure of [Qwen3.8-27B Kearuga + SGLang + DFlash 2](https://github.com/0xWhiteMage/qwen3.8-27b-kearuga-sglang-dgx-spark-dflash2): pinned inputs, a readable performance table, runnable commands, explicit metric definitions, troubleshooting and upstream credit. The [MiniMax H3 workflow pack](https://github.com/0xWhiteMage/Minimax-H3_ComfyUI-SageAttention-Spectrum) provides the same small, inspectable-asset approach.
-
-**They are separate recipes, not interchangeable configs.** The SGLang recipe uses other weight formats and runtime paths. Its DFlash/EAGLE results must not be copied onto this EXL3 target or multiplied into these speed figures. See [reference revisions and editorial choices](docs/PROVENANCE.md).
+The Spark profile loads the pinned stock drafter with TensorFold's **4-bit drafter-linear setting** (`--drafter-bits 4`). The stock downloaded checkpoint remains unchanged. The experimental discrete-GPU profile does not load a drafter. Neither profile enables FP8 prompts, KV quantisation, vision or an alternative drafter.
 
 ## Measured results
 
@@ -111,7 +118,8 @@ BottleCap reports **37.2% fewer reasoning tokens** on a macro-average BF16 evalu
 
 ## Requirements
 
-- **One NVIDIA DGX Spark / GB10**, Linux aarch64, 128 GB unified memory. This recipe is not qualified for x86, multi-Spark or a different GPU.
+- **Measured Spark profile:** one NVIDIA DGX Spark / GB10, Linux aarch64, 128 GB unified memory. No multi-Spark qualification is claimed.
+- **Experimental 24 GB profile:** Linux x86-64 and an Ampere-or-newer discrete NVIDIA GPU. The image build is verified, but card fit and inference are not. See the [startup-admission limitation](docs/24GB-GPUS.md#why-default-startup-is-blocked).
 - Working Docker and NVIDIA Container Toolkit; the measured host used driver **580.173.02**. This is an observed version, not a certified minimum.
 - Python 3.11+ on the host. The pinned container uses Python 3.12.
 - Internet access for the NVIDIA base, upstream source and model snapshots. Hugging Face authentication is needed if repository access becomes restricted.
@@ -122,13 +130,13 @@ The 16.35 GB figure is the two target weight shards, **not total runtime memory*
 
 ## Quick start
 
-Run these commands **on the Spark**, not on a NAS or Windows build host.
+This quick start is for the **Spark profile**. For an RTX 3090/4090-class system, use the separate [24 GB guide](docs/24GB-GPUS.md), not the 16-lane settings below. Run Spark commands **on the Spark**, not on a NAS or Windows build host.
 
 ### 1. Clone the recipe and install the download client
 
 ```bash
-git clone https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-dgx-spark.git
-cd thinkingcap-qwen3.8-27b-exl3-dgx-spark
+git clone https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda.git
+cd thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install 'huggingface-hub==1.24.0'
@@ -153,7 +161,7 @@ The target is also mirrored on [ModelScope AI](https://modelscope.ai/models/0xWh
 ### 3. Build the pinned runtime
 
 ```bash
-docker build --platform linux/arm64 -t thinkingcap-exl3:0.1.0 .
+docker build --platform linux/arm64 -t thinkingcap-exl3:0.2.0 .
 ```
 
 The build checks patch SHA-256 values, fetches the exact TensorFold commit, validates the rebased PR #260 source tree, applies the one-line GB10 planning change, pins runtime dependencies and checks the expected PyTorch/Triton versions. No model weights, auth tokens or local download caches enter the build context.
@@ -192,7 +200,24 @@ python scripts/probe.py --thinking on --requests 4 --concurrency 4 \
 
 These are small public diagnostics, **not a reproduction of the historical 50-prompt speed battery or a quality score**. Every receipt records TTFT, wall time, server-reported completion/reasoning tokens, final content, finish reason and cap hits. Choose a new output path for each run; receipts are never silently overwritten.
 
+## 24 GB NVIDIA GPUs
+
+There is a separate x86-64 build and **opt-in `cuda24` profile** for users evaluating an RTX 3090/4090-class card. It selects one GPU, removes the drafter, uses one lane with at most 8,192 context tokens, keeps BF16 KV/prompt math, and checks the upstream memory plan before starting.
+
+**The limitation is startup, not just context.** Header-derived estimates give 17.085 GiB while serving at 8,192 context, but **21.898 GiB at loading**. TensorFold's default reserve leaves at most 20 GiB on an ideal 24 GiB card, so default admission refuses even a short context. The upstream 2 GiB reserve override needs at least 23.898 GiB truly free after CUDA initialisation—too little spare room to promise a normal desktop card will fit.
+
+```bash
+# Target only; do not download or mount a speculative drafter for this profile.
+python scripts/artifacts.py --role target
+docker build --platform linux/amd64 -t thinkingcap-exl3:0.2.0 .
+python scripts/serve.py --profile cuda24 --dry-run
+```
+
+The actual attempt requires `--experimental-24gb` and may safely refuse. See the [full 24 GB guide](docs/24GB-GPUS.md) for architecture differences, live preflight, requests without prefix retention, and the evidence needed to qualify a card. **No RTX speed or measured-fit claim is made.**
+
 ## Use the API
+
+This is the **Spark** API example. The 24 GB guide uses a smaller output default/request budget, serial requests and `"draft": false`; the output default is not a hard per-request ceiling.
 
 ```bash
 curl -N http://127.0.0.1:8888/v1/chat/completions \
@@ -219,21 +244,23 @@ Reasoning is returned in `reasoning_content`, separately from final `content`. `
 | Immutable target/drafter manifests and checked downloads | A BF16 conversion/calibration dataset or exact re-quantisation procedure |
 | Buildable public-source TensorFold Python CUDA stack | Support in native TensorFold 1.x, SGLang or vLLM |
 | PR #260 attribution, patch checksums and source-tree check | Kearuga authorship of community kernels |
-| Pinned ARM64 CUDA base and runtime dependency versions | Byte-identical Docker image IDs or identical timing on all hosts |
+| Pinned ARM64/AMD64 CUDA base manifests and runtime dependency versions | Byte-identical Docker image IDs or identical timing on all hosts |
 | Safe launcher and public API probes | Reproduction of unpublished fidelity prompts/captures or internal Hard-V2-R sampling |
 | Fresh ARM64 image build, source comparison and live API receipts | A fresh replacement-server cold start or a rerun of the full benchmark qualification |
+| Fresh x86-64 image build and reproducible header-capacity estimates | A measured 24 GB cold start, peak memory, inference pass or RTX benchmark |
 
 The recipe image was built on the Spark. Its **456 installed source/data files match the resident qualified runtime after CRLF-to-LF normalisation**; this is source-text equivalence, not raw-byte equality. The live smoke probes used that existing resident runtime so a healthy service did not need to be restarted. See [verification evidence](docs/VERIFICATION.md). No new performance or general-quality claim is made from those smoke requests.
 
 ## Repository map
 
 ```text
-Dockerfile                 Pinned ARM64 build from public TensorFold source
+Dockerfile                 Pinned ARM64/AMD64 build from public TensorFold source
 requirements-runtime.txt   Locked Python runtime dependency closure
 manifests/                 Immutable target, drafter and runtime identities
 patches/                   Credited PR #260 rebase, GB10 change, checksums
 scripts/artifacts.py       Download and verify model files
-scripts/serve.py           Safe, explicit Docker launcher
+scripts/serve.py           Spark launcher and guarded experimental discrete-GPU profile
+scripts/capacity_check.py  Exact-runtime header estimates and live admission preflight
 scripts/probe.py           Streaming API probe and honest timing receipts
 scripts/compare_runtime.py Optional source-text comparison with an existing runtime
 bench/prompts.json         Small public prompt set, not the historical benchmark suite

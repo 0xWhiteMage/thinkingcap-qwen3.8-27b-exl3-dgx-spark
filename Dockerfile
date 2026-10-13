@@ -1,8 +1,8 @@
 # TensorFold Python CUDA, not the native Zig 1.x runtime.
-# The base digest is the linux/arm64 manifest for NVIDIA PyTorch 26.07.
-FROM nvcr.io/nvidia/pytorch@sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3
+# Pinned NVIDIA PyTorch 26.07 index selects linux/arm64 or linux/amd64.
+FROM nvcr.io/nvidia/pytorch@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
 
-LABEL org.opencontainers.image.source="https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-dgx-spark"
+LABEL org.opencontainers.image.source="https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda"
 LABEL org.opencontainers.image.description="ThinkingCap EXL3 serving recipe: pinned TensorFold Python CUDA + credited PR260 + GB10 planning"
 
 WORKDIR /opt/tensorfold-src

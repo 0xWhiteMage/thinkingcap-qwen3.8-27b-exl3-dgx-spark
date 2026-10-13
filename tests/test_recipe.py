@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,7 +85,8 @@ class LauncherTests(unittest.TestCase):
         module = load_script('serve')
         args = argparse.Namespace(models_dir=Path('/test/models'), cache_dir=Path('/test/cache'),
                                   image='recipe:test', name='recipe-test', host='127.0.0.1',
-                                  port=18888, parallel=16, context=262144, cpuset='5-9,15-19')
+                                  port=18888, parallel=16, context=262144, cpuset='5-9,15-19',
+                                  profile='spark', gpu=0, max_tokens=131072)
         command = module.command(args)
         self.assertIn('/test/models/target:/models/target:ro', command)
         self.assertIn('/test/models/drafter:/models/drafter:ro', command)
@@ -92,8 +94,96 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(command[command.index('--context') + 1], '262144')
         self.assertNotIn('--privileged', command)
 
+    def test_24gb_profile_has_bounded_non_speculative_defaults(self):
+        module = load_script('serve')
+        args = module.parse_args(['--profile', 'cuda24', '--dry-run'])
+        command = module.command(args)
+        self.assertEqual(args.context, 8192)
+        self.assertEqual(args.parallel, 1)
+        self.assertEqual(args.max_tokens, 4096)
+        self.assertIsNone(args.cpuset)
+        self.assertEqual(command[command.index('--gpus') + 1], 'device=0')
+        self.assertIn('--no-drafts', command)
+        self.assertIn('--no-prefill-fp8', command)
+        self.assertEqual(command[command.index('--drafter') + 1], 'none')
+        self.assertIn('TENSORFOLD_MIN_CAPABILITY=8.0', command)
+        self.assertIn('TENSORFOLD_MEMORY_RESERVE_GIB=2', command)
+        self.assertFalse(any('/models/drafter' in entry for entry in command))
+        self.assertNotIn('--privileged', command)
+
+    def test_24gb_requires_opt_in_before_any_docker_call(self):
+        module = load_script('serve')
+        with mock.patch.object(module.subprocess, 'run') as run:
+            with self.assertRaises(SystemExit):
+                module.main(['--profile', 'cuda24'])
+        run.assert_not_called()
+
+    def test_24gb_rejects_multiple_lanes_and_large_context(self):
+        module = load_script('serve')
+        for options in [['--parallel', '2'], ['--context', '262144']]:
+            with self.assertRaises(SystemExit):
+                module.parse_args(['--profile', 'cuda24', '--dry-run', *options])
+
+    def test_24gb_preflight_reads_headers_in_selected_gpu_image(self):
+        module = load_script('serve')
+        args = module.parse_args(['--profile', 'cuda24', '--gpu', '2', '--dry-run'])
+        command = module.preflight_command(args)
+        self.assertIn('--rm', command)
+        self.assertNotIn('-d', command)
+        self.assertEqual(command[command.index('--gpus') + 1], 'device=2')
+        self.assertIn('--live', command)
+        self.assertIn('/models/target', command)
+        self.assertFalse(any('/models/drafter' in entry for entry in command))
+
+
+class CapacityGateTests(unittest.TestCase):
+    def test_insufficient_budget_refuses_even_short_context(self):
+        module = load_script('capacity_check')
+        with self.assertRaises(ValueError):
+            module.require_admission({'fitting': 0, 'requested': 2048,
+                                      'staging_bytes': 7000, 'host_budget_bytes': 9000})
+
+    def test_insufficient_host_staging_refuses(self):
+        module = load_script('capacity_check')
+        with self.assertRaises(ValueError):
+            module.require_admission({'fitting': 8192, 'requested': 8192,
+                                      'staging_bytes': 7000, 'host_budget_bytes': 6000})
+
+    def test_missing_host_budget_is_not_a_pass(self):
+        module = load_script('capacity_check')
+        with self.assertRaises(ValueError):
+            module.require_admission({'fitting': 8192, 'requested': 8192,
+                                      'staging_bytes': 7000, 'host_budget_bytes': None})
+
+    def test_complete_admission_is_only_a_header_gate(self):
+        module = load_script('capacity_check')
+        module.require_admission({'fitting': 8192, 'requested': 8192,
+                                  'staging_bytes': 7000, 'host_budget_bytes': 9000})
+
 
 class ProbeTests(unittest.TestCase):
+    def test_no_draft_request_explicitly_disables_prefix_retention(self):
+        module = load_script('probe')
+        response = mock.MagicMock()
+        response.__enter__.return_value = self.events(
+            {'choices': [{'delta': {'content': 'READY'}, 'finish_reason': 'stop'}]},
+            {'choices': [], 'usage': {'completion_tokens': 2}})
+        with mock.patch.object(module.urllib.request, 'urlopen', return_value=response) as call:
+            module.request('http://localhost:18888', 'fixture-model', 'fixture-prompt',
+                           64, False, True, draft=False)
+        payload = json.loads(call.call_args.args[0].data)
+        self.assertIs(payload['draft'], False)
+
+    def test_default_probe_leaves_spark_draft_behaviour_unchanged(self):
+        module = load_script('probe')
+        response = mock.MagicMock()
+        response.__enter__.return_value = self.events(
+            {'choices': [{'delta': {'content': 'READY'}, 'finish_reason': 'stop'}]},
+            {'choices': [], 'usage': {'completion_tokens': 2}})
+        with mock.patch.object(module.urllib.request, 'urlopen', return_value=response) as call:
+            module.request('http://localhost:18888', 'fixture-model', 'fixture-prompt', 64, False, True)
+        self.assertNotIn('draft', json.loads(call.call_args.args[0].data))
+
     def events(self, *objects):
         for item in objects:
             yield ('data: ' + json.dumps(item) + '\n\n').encode()

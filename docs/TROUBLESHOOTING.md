@@ -2,7 +2,11 @@
 
 ## Build fails with an architecture or CUDA-version error
 
-Build on Linux aarch64 / the Spark using `--platform linux/arm64`. The NVIDIA base digest here identifies the ARM64 manifest, not an x86 image or a generic moving tag. Do not substitute another base and retain this recipe's qualification label. An NGC access or network error is a download blocker, not a model failure.
+Build the Spark profile on Linux aarch64 with `--platform linux/arm64`; use `--platform linux/amd64` on the experimental discrete-GPU path. The pinned NVIDIA image index selects fixed child manifests for those two architectures, not a moving tag. Do not substitute another base and retain this recipe's qualification label. An NGC access or network error is a download blocker, not a model failure.
+
+## A 24 GB card is refused despite the 16.35 GB weight download
+
+This is a known startup-admission limitation, not proof of corrupt weights. The exact header-based estimate is 21.898 GiB at loading; the default budget on an ideal 24 GiB card is at most 20 GiB. Lower context cannot bypass the loading gate. The experimental profile uses the supported 2 GiB reserve but needs at least 23.898 GiB free after CUDA initialisation and can still refuse. Do not patch out the guard or claim the image build proves a measured fit. Read the [24 GB qualification guide](24GB-GPUS.md).
 
 ## Patch checksum or source-tree check fails
 
