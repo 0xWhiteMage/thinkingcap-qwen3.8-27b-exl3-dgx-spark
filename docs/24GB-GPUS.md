@@ -1,6 +1,6 @@
 # 24 GB NVIDIA GPUs: experimental qualification path
 
-> **Not yet a working, qualified 24 GB deployment.** The pinned runtime can build for Linux x86-64, but its default memory admission refuses this checkpoint on an ideal 24 GiB card. The opt-in launcher below is a guarded qualification attempt, not a claim that an RTX 3090 or RTX 4090 has passed cold start or inference. No 24 GB card was available for that measurement.
+> **Not yet a working, qualified 24 GB deployment.** The pinned runtime can build for Linux x86-64, but its default memory admission refuses this checkpoint on an ideal 24 GiB card. The opt-in launcher below is a guarded qualification attempt, not a claim that an RTX 3090, RTX 4090 or 24 GB Blackwell GPU has passed cold start or inference. No 24 GB card was available for that measurement.
 
 The published weight shards occupy 16.35 GB on disk. That is not the loading peak, allocated weight memory, KV cache or total GPU requirement. The Spark's 128 GB unified-memory results must not be presented as 24 GB card speeds or capacity.
 
@@ -39,11 +39,14 @@ The source permits `TENSORFOLD_MEMORY_RESERVE_GIB=2`. At an ideal 22 GiB budget,
 
 The launcher uses the upstream live budget and host staging checks, not the advertised card size or a rounded `nvidia-smi` total. It does **not** patch out the admission guard or reduce the reserve below the upstream minimum. A refusal is the expected safe outcome on many 24 GB systems.
 
-## RTX 3090 versus RTX 4090
+## Ampere, Ada and 24 GB Blackwell candidates
 
 - **RTX 3090 / Ampere (SM 8.6):** the pinned runtime's default CUDA floor is SM 8.9. The profile sets the source-supported `TENSORFOLD_MIN_CAPABILITY=8.0` before imports, allowing its EXL3/W4A16 path. This does not enable unsupported FP8 or NVFP4 tensor-core operations.
 - **RTX 4090 / Ada (SM 8.9):** satisfies the stock capability floor, but has the same loading-admission problem. A newer GPU generation does not make the startup bytes disappear.
+- **RTX 5090 D V2 desktop and RTX 5090 Laptop GPU / Blackwell:** NVIDIA lists both with 24 GB GDDR7. These are **24 GB Blackwell candidates, not yet qualified**. The launcher does not exclude Blackwell by architecture, but the RTX 50-series SM 12.0 compilation path has not been checked in this recipe, and no real-card cold start, memory peak or inference pass is recorded. Spark is SM 12.1, not SM 12.0; its build and speed evidence must not be transferred to these GPUs. The same 24 GB loading-admission limitation remains.
 - The published recipe contains no RTX throughput, quality or measured peak-memory claim. A compiler check for an architecture is not a GPU execution test.
+
+Official references: [RTX 5090 D V2 specifications](https://www.nvidia.cn/geforce/graphics-cards/50-series/rtx-5090-d-v2/), [RTX 50-series laptop memory configurations](https://www.nvidia.com/en-us/geforce/laptops/50-series/) and [NVIDIA CUDA compute capabilities](https://developer.nvidia.com/cuda-gpus). Check the exact SKU rather than assuming every RTX 5090 has 24 GB.
 
 The exact EXL3 linear extension compiled, linked and loaded on the CPU build host for **both SM 8.6 and SM 8.9**; `cuobjdump` confirmed both cubins in the resulting library. See the [build/compiler receipt](../evidence/x86-build-and-kernels.json). This does not test GPU kernel execution or the rest of a real-card cold start.
 

@@ -28,7 +28,7 @@ Serve **BottleCap AI's ThinkingCap-Qwen3.8-27B**, quantised as the **Kearuga EXL
 | Your hardware | Start here | Current status |
 | --- | --- | --- |
 | DGX Spark / GB10, 128 GB unified memory | [Spark quick start](#quick-start) | Measured serving profile; historical Spark benchmarks retained |
-| RTX 3090 / RTX 4090-class, 24 GB discrete VRAM | [24 GB NVIDIA GPU guide](docs/24GB-GPUS.md) | Experimental one-GPU path; x86 build and Ampere/Ada EXL3 compilation verified, cold start and fit not qualified |
+| 24 GB discrete NVIDIA GPUs: RTX 3090 / 4090, RTX 5090 D V2 and RTX 5090 Laptop GPU | [24 GB NVIDIA GPU guide](docs/24GB-GPUS.md) | Experimental one-GPU path; Ampere/Ada EXL3 compilation verified. Blackwell candidates are not yet qualified; SM 12.0 compilation, cold start and fit are unverified |
 
 | Weight storage | Mean KL vs ThinkingCap BF16 | Single-request net decode | 16-request aggregate throughput |
 | :---: | :---: | :---: | :---: |
@@ -130,7 +130,7 @@ The 16.35 GB figure is the two target weight shards, **not total runtime memory*
 
 ## Quick start
 
-This quick start is for the **Spark profile**. For an RTX 3090/4090-class system, use the separate [24 GB guide](docs/24GB-GPUS.md), not the 16-lane settings below. Run Spark commands **on the Spark**, not on a NAS or Windows build host.
+This quick start is for the **Spark profile**. For a 24 GB discrete NVIDIA GPU, including RTX 3090/4090 or the Blackwell candidates RTX 5090 D V2 and RTX 5090 Laptop GPU, use the separate [24 GB guide](docs/24GB-GPUS.md), not the 16-lane settings below. Run Spark commands **on the Spark**, not on a NAS or Windows build host.
 
 ### 1. Clone the recipe and install the download client
 
@@ -202,7 +202,7 @@ These are small public diagnostics, **not a reproduction of the historical 50-pr
 
 ## 24 GB NVIDIA GPUs
 
-There is a separate x86-64 build and **opt-in `cuda24` profile** for users evaluating an RTX 3090/4090-class card. It selects one GPU, removes the drafter, uses one lane with at most 8,192 context tokens, keeps BF16 KV/prompt math, and checks the upstream memory plan before starting.
+There is a separate x86-64 build and **opt-in `cuda24` profile** for users evaluating 24 GB discrete NVIDIA GPUs. Examples include RTX 3090/4090 and the **RTX 5090 D V2 / RTX 5090 Laptop GPU — 24 GB Blackwell candidates, not yet qualified**. The profile selects one GPU, removes the drafter, uses one lane with at most 8,192 context tokens, keeps BF16 KV/prompt math, and checks the upstream memory plan before starting. Its architecture floor does not exclude Blackwell, but SM 12.0 compilation and real-card startup/inference have not been tested; Spark's SM 12.1 results do not establish RTX 50-series support.
 
 **The limitation is startup, not just context.** Header-derived estimates give 17.085 GiB while serving at 8,192 context, but **21.898 GiB at loading**. TensorFold's default reserve leaves at most 20 GiB on an ideal 24 GiB card, so default admission refuses even a short context. The upstream 2 GiB reserve override needs at least 23.898 GiB truly free after CUDA initialisation—too little spare room to promise a normal desktop card will fit.
 
