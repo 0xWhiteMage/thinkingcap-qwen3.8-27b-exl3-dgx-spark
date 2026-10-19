@@ -1,0 +1,46 @@
+{
+  "schema": "public-api-probe-v1",
+  "created_utc": "2026-10-19T11:11:39.723992+00:00",
+  "scope": "Small public prompt probe, NOT the historical internal performance or fidelity battery",
+  "settings": {
+    "model": "Qwen3.8 27B Kearuga (ThinkingCap)",
+    "concurrency": 1,
+    "requests": 1,
+    "max_tokens": 64,
+    "thinking": "off",
+    "greedy": true,
+    "no_draft": false
+  },
+  "summary": {
+    "requests": 1,
+    "errors": 0,
+    "wall_s": 47.175304565011174,
+    "aggregate_completion_tok_s": 0.04239506280757228,
+    "cap_hits": 0
+  },
+  "records": [
+    {
+      "index": 0,
+      "id": "smoke-ready",
+      "status": "ok",
+      "content": "READY",
+      "reasoning_content": "",
+      "usage": {
+        "prompt_tokens": 26,
+        "completion_tokens": 2,
+        "total_tokens": 28,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 46.230639694986166,
+      "wall_s": 47.17477133400098,
+      "capped": false,
+      "has_final_answer": true
+    }
+  ]
+}

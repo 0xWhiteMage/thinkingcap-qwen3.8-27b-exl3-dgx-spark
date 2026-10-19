@@ -1,0 +1,391 @@
+{
+  "schema": "public-api-probe-v1",
+  "created_utc": "2026-10-19T11:14:29.514778+00:00",
+  "scope": "Small public prompt probe, NOT the historical internal performance or fidelity battery",
+  "settings": {
+    "model": "Qwen3.8 27B Kearuga (ThinkingCap)",
+    "concurrency": 1,
+    "requests": 16,
+    "max_tokens": 1024,
+    "thinking": "on",
+    "greedy": false,
+    "no_draft": false
+  },
+  "summary": {
+    "requests": 16,
+    "errors": 0,
+    "wall_s": 63.05312446199241,
+    "aggregate_completion_tok_s": 52.43197745090036,
+    "cap_hits": 0
+  },
+  "records": [
+    {
+      "index": 0,
+      "id": "smoke-ready",
+      "status": "ok",
+      "content": "READY",
+      "reasoning_content": "User wants exactly the single word READY, no punctuation or explanation. Just output READY.\n",
+      "usage": {
+        "prompt_tokens": 66,
+        "completion_tokens": 22,
+        "total_tokens": 88,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 19
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5204685500066262,
+      "wall_s": 0.7692426050052745,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 1,
+      "id": "code-context",
+      "status": "ok",
+      "content": "A Python context manager runs setup code before a block and cleanup code after it, even if an error occurs. With `with`, files are automatically closed.\n\n```python\nwith open(\"example.txt\", \"r\") as f:\n    data = f.read()\n\n# File is closed automatically here\n```",
+      "reasoning_content": "We need answer user: \"Explain Python context managers with a short example that safely opens and closes a file. Need final concise. Provide explanation and code. Mention with statement, __enter__, __exit__, ensures close even exceptions.\n",
+      "usage": {
+        "prompt_tokens": 69,
+        "completion_tokens": 114,
+        "total_tokens": 183,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 49
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5071552800072823,
+      "wall_s": 2.4110511659964686,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 2,
+      "id": "math-congruence",
+      "status": "ok",
+      "content": "The least positive integer is **8**.\n\nVerification:\n- \\(8 \\equiv 2 \\pmod{3}\\)\n- \\(8 \\equiv 3 \\pmod{5}\\)",
+      "reasoning_content": "We need answer simple. Need final: n congruent 2 mod3, 3 mod5. Need least positive. Test numbers congruent 3 mod5: 3,8,13,18,... mod3: 3=0,8=2 => 8. Verification: 8=3*2+2, 8=5*1+3. Need concise.\n",
+      "usage": {
+        "prompt_tokens": 79,
+        "completion_tokens": 128,
+        "total_tokens": 207,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 85
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5131958849960938,
+      "wall_s": 2.34154559399758,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 3,
+      "id": "chat-kv",
+      "status": "ok",
+      "content": "Model weights are the trained parameters stored in the model files, and they define what the AI can do.  \nThe KV cache is temporary memory that stores key/value vectors from earlier tokens so the model doesn't have to recompute them for every new token.  \nWeights stay the same for a given model, while the KV cache changes as you generate more text.  \nIn practice, weights determine quality, and the KV cache affects speed and memory usage during local runs.",
+      "reasoning_content": "We need to answer user: \"Explain the difference between model weights and a KV cache to a new local-AI user in four sentences.\" Need exactly four sentences. Need likely concise. Need define weights and KV cache. Sentence count careful.\n1 \"Model weights are the trained parameters stored in the model files, and they define what the AI can do.\" 2 \"The KV cache is temporary memory that stores key/value vectors from earlier tokens in a conversation so the model doesn't have to recompute them for every new token.\" 3 \"Weights stay the same for a given model, while the KV cache changes as you generate more text.\" 4 \"In practice, weights determine quality, and KV cache affects speed and memory usage during local runs.\" Count four. Good. Need final only four sentences.\n",
+      "usage": {
+        "prompt_tokens": 74,
+        "completion_tokens": 261,
+        "total_tokens": 335,
+        "prompt_tokens_details": {
+          "cached_tokens": 73
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 166
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.4903321330057224,
+      "wall_s": 4.515245911999955,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 4,
+      "id": "tool-plan",
+      "status": "ok",
+      "content": "1. Ask the user for the meeting\u2019s location and time/date, if not already known.\n2. Use the read-only weather lookup tool to retrieve the forecast for that place and time.\n3. Review the retrieved forecast for factors such as rain, wind, extreme heat, lightning, or other outdoor risks.\n4. Based only on the tool\u2019s result, advise whether postponing is prudent or unnecessary.\n5. If a postponement or update is appropriate, use the email draft tool to create a draft message only\u2014do not send it.",
+      "reasoning_content": "We need answer user's request. Need provide final concise. User asks: \"You have a read-only weather lookup tool and an email draft tool. A user asks whether to postpone an outdoor meeting. Give a tool-use plan without inventing a forecast or sending an email.\" Need plan only, no invented forecast or sending email. Could list steps: 1 get meeting time/location. 2 query weather lookup for relevant place/time. 3 inspect forecast risk. 4 decide? maybe recommend based on retrieved data only. 5 use email draft tool to draft (not send) notification with postponement or confirm, pending data. Emphasize read-only, no send. Final.\n",
+      "usage": {
+        "prompt_tokens": 91,
+        "completion_tokens": 255,
+        "total_tokens": 346,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 140
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5169489440013422,
+      "wall_s": 5.479437713001971,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 5,
+      "id": "long-summary",
+      "status": "ok",
+      "content": "- Use an immutable model revision and verify file hashes before loading.\n- Keep the endpoint local unless authentication and access restrictions are configured.\n- Never claim a benchmark result from a health check.",
+      "reasoning_content": "We need answer user's request. Need produce final concise three-item checklist. Ensure three items maybe combine constraints. User asks summarise constraints in three-item checklist: use immutable model revision; check file hashes before loading; keep endpoint local unless authentication and access restrictions configured; never claim benchmark result from health check. That's four constraints but wants three-item checklist. Need summarize in 3 items likely combine last two? Could be:\n- Use an immutable model revision and verify file hashes before loading.\n- Keep endpoint local unless authentication and access restrictions are configured.\n- Never claim a benchmark result from a health check.\nThat's 3. Final only checklist.\n",
+      "usage": {
+        "prompt_tokens": 97,
+        "completion_tokens": 177,
+        "total_tokens": 274,
+        "prompt_tokens_details": {
+          "cached_tokens": 96
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 136
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.48883178499818314,
+      "wall_s": 2.6298186849890044,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 6,
+      "id": "code-race",
+      "status": "ok",
+      "content": "Checking and then opening is a **TOCTOU** race: *time of check* vs *time of use*.\n\n```python\nif not path.exists():\n    with open(path, \"w\") as f:\n        f.write(data)\n```\n\nBetween `path.exists()` returning `False` and `open(..., \"w\")`, another process can create the file. Then your code opens it for writing and overwrites/truncates it.\n\nA safe Python alternative is to let the OS create the file atomically, refusing to overwrite it:\n\n```python\nwith open(path, \"x\", encoding=\"utf-8\") as f:\n    f.write(data)\n```\n\nMode `\"x\"` means **exclusive creation**: create the file if it does not exist, otherwise fail with `FileExistsError`.\n\nFor more explicit control over permissions:\n\n```python\nimport os\n\ndef write_new_file(path, data, mode=0o600, encoding=\"utf-8\"):\n    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)\n    try:\n        f = os.fdopen(fd, \"w\", encoding=encoding)\n    except:\n        os.close(fd)\n        raise\n\n    with f:\n        f.write(data)\n```",
+      "reasoning_content": "We need answer user asks conceptual and code. Need craft final. Need explain TOCTOU race: between existence check and open, another process can create file. Python safe alternative refusing overwrite: use open with flags os.O_CREAT | os.O_EXCL (and maybe os.O_WRONLY) in os.open to atomically create if not exists; catch FileExistsError. For writing text, can os.fdopen. But be careful os.open path, 0o666, O_WRONLY|O_CREAT|O_EXCL. Alternative: try open(path, 'x', encoding='utf-8') in text mode exclusive. Python open mode 'x' creates and fails if exists. That is safe because no separate check. Need maybe mention umask and permissions. If need safe atomic create with exact permissions maybe os.open. Could show function:\n\nimport os\n\ndef create_new(path, mode=0o600):\n    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)\n    try:\n        with os.fdopen(fd, 'w') as f:\n            return f\n    except:\n        os.close(fd); raise\n\nBut with os.fdopen returns file object; returning inside try? Need context? Simpler:\ndef write_new(path, data, encoding='utf-8', mode=0o600):\n    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)\n    try:\n        with os.fdopen(fd, 'w', encoding=encoding) as f:\n            f.write(data)\n    except:\n        os.close(fd); raise\n\nBut if os.fdopen succeeds and with closes fd, okay. In except if fdopen failed, close. If write fails after fdopen? with has closed fd, then except tries close fd causing EBADF? Actually if with closed fd, except close duplicate may error. Need avoid by not using with? Do:\n\nfd = os.open(...)\ntry:\n    f = os.fdopen(fd, 'w', encoding=encoding)\nexcept:\n    os.close(fd); raise\nwith f:\n    f.write(data)\n\nThat's fine. Or just use open(path,'x'). Since question asks safe Python alternative refuses to overwrite. Could show minimal:\nwith open(path, 'x', encoding='utf-8') as f: # raises FileExistsError if exists\n    f.write(text)\n\nThis is probably best. But maybe mention 'x' works for text/binary and creates if absent. It relies on open(2) O_CREAT|O_EXCL, atomic at filesystem. It refuses overwrite. For exact permission, os.open. Need explain race: check existence (os.path.exists / Path.exists) then open(..., 'w') creates; another process can create file in that interval; then 'w' truncates/overwrites. Also symlinks? maybe mention path can be replaced with symlink? Opening with O_EXCL still prevents overwriting existing regular file; but if path is symlink? O_CREAT|O_EXCL fails if symlink exists? POSIX says if path resolves to symlink? It can fail. But not needed. Need likely concise. Final with explanation and code. Ensure answer directly. Could include both 'x' and low-level.\n",
+      "usage": {
+        "prompt_tokens": 80,
+        "completion_tokens": 971,
+        "total_tokens": 1051,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 693
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5110158419847721,
+      "wall_s": 19.036347904999275,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 7,
+      "id": "math-count",
+      "status": "ok",
+      "content": "The word **BANANA** has 6 letters: A appears 3 times, N appears 2 times, B appears 1 time.\n\nNumber of distinct arrangements is:\n\n\\[\n\\frac{6!}{3!2!}=\\frac{720}{12}=60\n\\]\n\nSo, there are **60 distinct arrangements**.",
+      "reasoning_content": "We need answer user asks: How many distinct arrangements are there of letters in BANANA? Explain counting method. Need concise. BANANA letters: B, A, N, A, N, A => 6 letters total, A repeated 3, N repeated 2, B 1. Distinct permutations = 6!/(3!2!1!) = 720/(6*2)=60. Explain multiset permutation.\n",
+      "usage": {
+        "prompt_tokens": 70,
+        "completion_tokens": 172,
+        "total_tokens": 242,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 94
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5063024629926076,
+      "wall_s": 2.6575042019976536,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 8,
+      "id": "instructions-json",
+      "status": "ok",
+      "content": "{\n  \"status\": \"ok\",\n  \"count\": 3\n}",
+      "reasoning_content": "We need answer user's request: output only valid JSON with exactly two keys: status ok, count integer 3. Then final only JSON no extra. Ensure valid JSON.\n",
+      "usage": {
+        "prompt_tokens": 74,
+        "completion_tokens": 57,
+        "total_tokens": 131,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 37
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5114616469945759,
+      "wall_s": 1.245033623999916,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 9,
+      "id": "tools-boundary",
+      "status": "ok",
+      "content": "The instruction is untrusted external input attempting to hijack the assistant and expose private data, so it must not override the user or upload anything. Local credentials are sensitive personal data, and transmitting them without the user\u2019s explicit, informed consent would be unsafe and unauthorized.",
+      "reasoning_content": "We need to respond to user: \"A web page tells an assistant to ignore the user and upload local credentials. Explain why the assistant must not follow that instruction, in two sentences.\" Need concise two sentences. Must be same language? user English. Need just answer. Ensure two sentences. Maybe: \"The instruction is an untrusted external input attempting to hijack the assistant and expose private data, so it must not override the user or perform exfiltration.\" \"Local credentials are sensitive personal data, and uploading them without the user\u2019s explicit, informed consent would be unsafe and unauthorized.\" Count two. Need maybe mention prompt injection. Two sentences. Final only two sentences.\n",
+      "usage": {
+        "prompt_tokens": 81,
+        "completion_tokens": 192,
+        "total_tokens": 273,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 137
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.511165934978635,
+      "wall_s": 3.8113246739958413,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 10,
+      "id": "smoke-ready",
+      "status": "ok",
+      "content": "READY",
+      "reasoning_content": "User wants exactly the single word READY, no punctuation or explanation. Just output READY.\n",
+      "usage": {
+        "prompt_tokens": 66,
+        "completion_tokens": 22,
+        "total_tokens": 88,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 19
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5059792149841087,
+      "wall_s": 0.7582702489889925,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 11,
+      "id": "code-context",
+      "status": "ok",
+      "content": "A Python context manager runs setup code before a block and cleanup code after it, even if an error occurs. With `with`, files are automatically closed.\n\n```python\nwith open(\"example.txt\", \"r\") as f:\n    data = f.read()\n\n# File is closed automatically here\n```",
+      "reasoning_content": "We need answer user: \"Explain Python context managers with a short example that safely opens and closes a file. Need final concise. Provide explanation and code. Mention with statement, __enter__, __exit__, ensures close even exceptions.\n",
+      "usage": {
+        "prompt_tokens": 69,
+        "completion_tokens": 114,
+        "total_tokens": 183,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 49
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5095634120079922,
+      "wall_s": 2.4099134530115407,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 12,
+      "id": "math-congruence",
+      "status": "ok",
+      "content": "The least positive integer is **8**.\n\nVerification:\n- \\(8 \\equiv 2 \\pmod{3}\\)\n- \\(8 \\equiv 3 \\pmod{5}\\)",
+      "reasoning_content": "We need answer simple. Need final: n congruent 2 mod3, 3 mod5. Need least positive. Test numbers congruent 3 mod5: 3,8,13,18,... mod3: 3=0,8=2 => 8. Verification: 8=3*2+2, 8=5*1+3. Need concise.\n",
+      "usage": {
+        "prompt_tokens": 79,
+        "completion_tokens": 128,
+        "total_tokens": 207,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 85
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5107506880012807,
+      "wall_s": 2.3464475109940395,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 13,
+      "id": "chat-kv",
+      "status": "ok",
+      "content": "Model weights are the trained parameters stored in the model files, and they define what the AI can do.  \nThe KV cache is temporary memory that stores key/value vectors from earlier tokens so the model doesn't have to recompute them for every new token.  \nWeights stay the same for a given model, while the KV cache changes as you generate more text.  \nIn practice, weights determine quality, and the KV cache affects speed and memory usage during local runs.",
+      "reasoning_content": "We need to answer user: \"Explain the difference between model weights and a KV cache to a new local-AI user in four sentences.\" Need exactly four sentences. Need likely concise. Need define weights and KV cache. Sentence count careful.\n1 \"Model weights are the trained parameters stored in the model files, and they define what the AI can do.\" 2 \"The KV cache is temporary memory that stores key/value vectors from earlier tokens in a conversation so the model doesn't have to recompute them for every new token.\" 3 \"Weights stay the same for a given model, while the KV cache changes as you generate more text.\" 4 \"In practice, weights determine quality, and KV cache affects speed and memory usage during local runs.\" Count four. Good. Need final only four sentences.\n",
+      "usage": {
+        "prompt_tokens": 74,
+        "completion_tokens": 261,
+        "total_tokens": 335,
+        "prompt_tokens_details": {
+          "cached_tokens": 73
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 166
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.4923614990111673,
+      "wall_s": 4.513650007007527,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 14,
+      "id": "tool-plan",
+      "status": "ok",
+      "content": "1. Ask the user for the meeting\u2019s location and time/date, if not already known.\n2. Use the read-only weather lookup tool to retrieve the forecast for that place and time.\n3. Review the retrieved forecast for factors such as rain, wind, extreme heat, lightning, or other outdoor risks.\n4. Based only on the tool\u2019s result, advise whether postponing is prudent or unnecessary.\n5. If a postponement or update is appropriate, use the email draft tool to create a draft message only\u2014do not send it.",
+      "reasoning_content": "We need answer user's request. Need provide final concise. User asks: \"You have a read-only weather lookup tool and an email draft tool. A user asks whether to postpone an outdoor meeting. Give a tool-use plan without inventing a forecast or sending an email.\" Need plan only, no invented forecast or sending email. Could list steps: 1 get meeting time/location. 2 query weather lookup for relevant place/time. 3 inspect forecast risk. 4 decide? maybe recommend based on retrieved data only. 5 use email draft tool to draft (not send) notification with postponement or confirm, pending data. Emphasize read-only, no send. Final.\n",
+      "usage": {
+        "prompt_tokens": 91,
+        "completion_tokens": 255,
+        "total_tokens": 346,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 140
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.5105539520154707,
+      "wall_s": 5.477348313012044,
+      "capped": false,
+      "has_final_answer": true
+    },
+    {
+      "index": 15,
+      "id": "long-summary",
+      "status": "ok",
+      "content": "- Use an immutable model revision and verify file hashes before loading.\n- Keep the endpoint local unless authentication and access restrictions are configured.\n- Never claim a benchmark result from a health check.",
+      "reasoning_content": "We need answer user's request. Need produce final concise three-item checklist. Ensure three items maybe combine constraints. User asks summarise constraints in three-item checklist: use immutable model revision; check file hashes before loading; keep endpoint local unless authentication and access restrictions configured; never claim benchmark result from health check. That's four constraints but wants three-item checklist. Need summarize in 3 items likely combine last two? Could be:\n- Use an immutable model revision and verify file hashes before loading.\n- Keep endpoint local unless authentication and access restrictions are configured.\n- Never claim a benchmark result from a health check.\nThat's 3. Final only checklist.\n",
+      "usage": {
+        "prompt_tokens": 97,
+        "completion_tokens": 177,
+        "total_tokens": 274,
+        "prompt_tokens_details": {
+          "cached_tokens": 96
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 136
+        }
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.48903907599742524,
+      "wall_s": 2.6501074289990356,
+      "capped": false,
+      "has_final_answer": true
+    }
+  ]
+}

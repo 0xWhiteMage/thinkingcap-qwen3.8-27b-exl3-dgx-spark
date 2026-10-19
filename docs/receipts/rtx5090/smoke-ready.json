@@ -1,0 +1,40 @@
+{
+  "schema": "public-api-probe-v1",
+  "created_utc": "2026-10-19T13:24:56.131324+00:00",
+  "scope": "Small public prompt probe, NOT the historical internal performance or fidelity battery",
+  "settings": {
+    "model": "thinkingcap-27b-kearuga-exl3-4.0bpw",
+    "concurrency": 1,
+    "requests": 1,
+    "max_tokens": 64,
+    "thinking": "off",
+    "greedy": true,
+    "no_draft": false
+  },
+  "summary": {
+    "requests": 1,
+    "errors": 0,
+    "wall_s": 0.06376843503676355,
+    "aggregate_completion_tok_s": 31.363479421236654,
+    "cap_hits": 0
+  },
+  "records": [
+    {
+      "index": 0,
+      "id": "smoke-ready",
+      "status": "ok",
+      "content": "READY",
+      "reasoning_content": "",
+      "usage": {
+        "prompt_tokens": 26,
+        "completion_tokens": 2,
+        "total_tokens": 28
+      },
+      "finish_reason": "stop",
+      "ttft_s": 0.06340129906311631,
+      "wall_s": 0.0634751170873642,
+      "capped": false,
+      "has_final_answer": true
+    }
+  ]
+}
