@@ -1,5 +1,13 @@
 # Third-party scope and notices
 
+## TandemLLM and independent community receipts
+
+[TandemLLM](https://github.com/0xBakeer/TandemLLM) by 0xBakeer and contributors is the recommended Spark serving engine and is separately [AGPL-3.0](https://github.com/0xBakeer/TandemLLM/blob/f1abbbcf3c4c8e2de6c7d27062ef5b44ca075caf/LICENSE). This repository links to its pinned installer/source/profile; it does not bundle or relicense Tandem engine source, dependencies or weights. Review the upstream obligations for your deployment/distribution. The recipe's MIT licence does not replace those terms.
+
+**Benchmarks by Niklas Lenz** — [GitHub: Nipale-ai](https://github.com/Nipale-ai), [X: @niklaslenz_ai](https://x.com/niklaslenz_ai), [niklaslenz.com](https://niklaslenz.com). His unchanged JSON receipts and original report are under [docs/receipts/](docs/receipts/README.md), sourced from PR #1 head `031ebfda6b840f66dd6728f4b69ced5e5ea9dcc2`. Attribution does not turn contributor observations into maintainer validation; report-only speed/quality summaries remain separate from attached receipts. The quoted report retains its author's provenance.
+
+The RTX 5090 suggestion links to the separately maintained [MiaAI-Lab ExLlamaV3 + MTP kit](https://github.com/MiaAI-Lab/Qwen3.8-27B-16gb-NVIDIA-GPUs-one-click-install/tree/bbb11db4b7ff688a62841c68e0892fa099bc3362); its source and dependencies are not bundled or relicensed here.
+
 ## TensorFold and the vendored patches
 
 TensorFold is Copyright 2026 Ash and contributors, Apache License 2.0. Its retained licence, NOTICE, third-party notices and referenced licence texts are under `third_party/tensorfold/`.

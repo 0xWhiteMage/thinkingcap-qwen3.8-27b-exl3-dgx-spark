@@ -1,0 +1,227 @@
+{
+  "schema": "resident-tandem-inspection-v1",
+  "scope": "Read-only settings/source/weight inspection plus six short live API requests on the existing service. No install, restart, model switch, fresh cold start, throughput or task-quality qualification. Private reasoning and non-readiness answer text omitted.",
+  "engine": {
+    "repo": "https://github.com/0xBakeer/TandemLLM",
+    "version": "v0.11.4",
+    "revision": "760136f7a18fe33bf0a5fa2439793ba313686379",
+    "upstream_checkout_clean": true,
+    "profile": "exl3-4.0",
+    "target_via_local_symlink": true,
+    "reported_hf_repo_is_stock_profile_metadata": true,
+    "rendered_launcher_parallel_flags_added_locally": true
+  },
+  "settings": {
+    "max_len": 262144,
+    "default_max_tokens": 32768,
+    "reasoning_effort_default": "medium",
+    "reasoning_format": "tags",
+    "conductor": "on",
+    "external_lookup_corpus": "",
+    "parallel_slots": 4,
+    "slot_max_lens": [
+      262144,
+      8192,
+      8192,
+      8192
+    ],
+    "parallel_floor_gib": 15,
+    "max_queue": 16,
+    "host_bind": "0.0.0.0",
+    "direct_api_auth": "not configured by this recipe; private network only"
+  },
+  "hardware": {
+    "gpu": "NVIDIA GB10",
+    "driver": "580.173.02",
+    "architecture": "Linux aarch64",
+    "applications_graphics_mhz_observed": 2418,
+    "current_graphics_mhz_observed": 2411,
+    "clock_boundary": "One nvidia-smi snapshot, not a fixed benchmark-clock claim or a power measurement."
+  },
+  "target_shards": [
+    {
+      "path": "model-00001-of-00002.safetensors",
+      "size": 8396212225,
+      "sha256": "32ebe5487d1f3b6dd6d1a6f3a89ec1cb35fca59249bfd0fef893eff9bd5449ca"
+    },
+    {
+      "path": "model-00002-of-00002.safetensors",
+      "size": 7953768963,
+      "sha256": "b4b54129bf43845120d4ed6af302e93cd976bd4cde4cf388c339266a45f6795f"
+    }
+  ],
+  "target_boundary": "Both actual resident-path weight shard hashes and sizes match manifests/target.json. Full tokenizer/config/base/drafter asset equivalence was not established.",
+  "installer_candidate": {
+    "version": "v0.12.0",
+    "revision": "f1abbbcf3c4c8e2de6c7d27062ef5b44ca075caf",
+    "dry_run_on_gb10_exit_code": 0,
+    "flags": [
+      "--setup",
+      "--no-start",
+      "--yes",
+      "--host",
+      "127.0.0.1",
+      "--dry-run"
+    ],
+    "candidate_install_directory_absent_afterwards": true,
+    "fresh_install_or_cold_start_exercised": false
+  },
+  "smoke_runs": [
+    {
+      "created_utc": "2026-10-19T15:46:31.105585+00:00",
+      "path": "default-conductor",
+      "settings": {
+        "model": "TandemLLM",
+        "concurrency": 1,
+        "requests": 1,
+        "max_tokens": 64,
+        "thinking": "off",
+        "greedy": true,
+        "no_draft": false,
+        "tandem_raw": false
+      },
+      "requests": 1,
+      "errors": 0,
+      "cap_hits": 0,
+      "records": [
+        {
+          "id": "smoke-ready",
+          "status": "ok",
+          "finish_reason": "stop",
+          "capped": false,
+          "has_final_answer": true,
+          "completion_tokens": 2,
+          "reasoning_tokens": 0,
+          "prompt_tokens": 26,
+          "cached_tokens": 0,
+          "injected_tokens": 522,
+          "harness_present": true,
+          "final_answer": "READY"
+        }
+      ]
+    },
+    {
+      "created_utc": "2026-10-19T15:46:44.143039+00:00",
+      "path": "default-conductor",
+      "settings": {
+        "model": "TandemLLM",
+        "concurrency": 1,
+        "requests": 2,
+        "max_tokens": 1024,
+        "thinking": "on",
+        "greedy": false,
+        "no_draft": false,
+        "tandem_raw": false
+      },
+      "requests": 2,
+      "errors": 0,
+      "cap_hits": 0,
+      "records": [
+        {
+          "id": "smoke-ready",
+          "status": "ok",
+          "finish_reason": "stop",
+          "capped": false,
+          "has_final_answer": true,
+          "completion_tokens": 18,
+          "reasoning_tokens": 15,
+          "prompt_tokens": 66,
+          "cached_tokens": 0,
+          "injected_tokens": 522,
+          "harness_present": true
+        },
+        {
+          "id": "code-context",
+          "status": "ok",
+          "finish_reason": "stop",
+          "capped": false,
+          "has_final_answer": true,
+          "completion_tokens": 442,
+          "reasoning_tokens": 284,
+          "prompt_tokens": 69,
+          "cached_tokens": 0,
+          "injected_tokens": 1646,
+          "harness_present": true
+        }
+      ]
+    },
+    {
+      "created_utc": "2026-10-19T15:46:24.718772+00:00",
+      "path": "raw",
+      "settings": {
+        "model": "TandemLLM",
+        "concurrency": 1,
+        "requests": 1,
+        "max_tokens": 64,
+        "thinking": "off",
+        "greedy": true,
+        "no_draft": false,
+        "tandem_raw": true
+      },
+      "requests": 1,
+      "errors": 0,
+      "cap_hits": 0,
+      "records": [
+        {
+          "id": "smoke-ready",
+          "status": "ok",
+          "finish_reason": "stop",
+          "capped": false,
+          "has_final_answer": true,
+          "completion_tokens": 2,
+          "reasoning_tokens": 0,
+          "prompt_tokens": 26,
+          "cached_tokens": 0,
+          "injected_tokens": 0,
+          "harness_present": false,
+          "final_answer": "READY"
+        }
+      ]
+    },
+    {
+      "created_utc": "2026-10-19T15:46:27.723908+00:00",
+      "path": "raw",
+      "settings": {
+        "model": "TandemLLM",
+        "concurrency": 1,
+        "requests": 2,
+        "max_tokens": 1024,
+        "thinking": "on",
+        "greedy": false,
+        "no_draft": false,
+        "tandem_raw": true
+      },
+      "requests": 2,
+      "errors": 0,
+      "cap_hits": 0,
+      "records": [
+        {
+          "id": "smoke-ready",
+          "status": "ok",
+          "finish_reason": "stop",
+          "capped": false,
+          "has_final_answer": true,
+          "completion_tokens": 18,
+          "reasoning_tokens": 15,
+          "prompt_tokens": 66,
+          "cached_tokens": 0,
+          "injected_tokens": 0,
+          "harness_present": false
+        },
+        {
+          "id": "code-context",
+          "status": "ok",
+          "finish_reason": "stop",
+          "capped": false,
+          "has_final_answer": true,
+          "completion_tokens": 119,
+          "reasoning_tokens": 55,
+          "prompt_tokens": 69,
+          "cached_tokens": 0,
+          "injected_tokens": 0,
+          "harness_present": false
+        }
+      ]
+    }
+  ]
+}

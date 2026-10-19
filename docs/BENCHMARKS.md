@@ -1,10 +1,14 @@
 # Benchmark methodology and claim boundaries
 
-## Three distinct kinds of evidence
+## Distinct kinds of evidence
 
 1. **Historical release qualification.** `evidence/source/BENCHMARKS.json` and `RELEASE_PROVENANCE.json` are copied unchanged from the pinned target release. They are the source for the README's performance, fidelity and reasoning-task tables.
 2. **Recipe verification.** A fresh ARM64 Docker build, source-text comparison and small live API probes establish that the build is usable and the client can talk to the resident qualified stack. They do not repeat the full qualification.
 3. **Upstream ThinkingCap context.** BottleCap's BF16 model card owns the 37.2% macro-average reasoning-token reduction. It is not an EXL3 result, and it cannot be multiplied into a serving-stack throughput gain.
+4. **Independent public receipts.** Niklas Lenz ([GitHub](https://github.com/Nipale-ai), [X](https://x.com/niklaslenz_ai)) supplied [11 unchanged JSONs](receipts/README.md) for RTX 5090 ExLlamaV3 + MTP, Spark Tandem raw and Spark TensorFold. These are different stacks/public prompts, not historical-battery replays. [Recommended recipes](RECOMMENDED-RECIPES.md) separates attached receipts from report-only speed/quality summaries.
+5. **Resident Tandem inspection.** [Six short raw/default-path API requests and settings/hash checks](../evidence/tandem-inspection.json) concern the existing v0.11.4 four-slot service, not a fresh install or a performance/accuracy qualification of the primary v0.12.0 recipe.
+
+The historical measurements in the sections below belong to **TensorFold**, not Tandem. Recommending Tandem as the primary engine does not transfer those scores or imply it wins every workload.
 
 ## Historical speed measurements
 
@@ -45,7 +49,7 @@ The recorded quality verdict is registered non-inferiority. The 62/70 versus 60/
 
 It **does not calculate C1 net decode** or count one SSE event as one token. If any request errors, aggregate throughput is null and the process exits non-zero. Missing usage or an incomplete stream is an error, never a zero-token success. A capped reply can still contribute tokens to a speed probe but is not treated as a completed answer.
 
-For a descriptive public concurrency screen, run each cell separately on an otherwise idle server with a new receipt path:
+For the **legacy TensorFold** descriptive public concurrency screen, run each cell separately on an otherwise idle server with a new receipt path. These defaults target port 8888 and the legacy model ID; they are not Tandem commands:
 
 ```bash
 python scripts/probe.py --requests 16 --concurrency 1 --thinking on --greedy --output results/public-c1.json
@@ -55,3 +59,11 @@ python scripts/probe.py --requests 16 --concurrency 16 --thinking on --greedy --
 ```
 
 The ten prompts repeat when requests exceed ten. Prefix caching and repeated prompts can affect these cells; record warm/cold state, recipe commit, image ID, driver, clocks and competing load with your results. Do not label this screen as a replay of the published historical table. No benchmark is run automatically during installation.
+
+## Tandem raw versus default serving
+
+Use explicit `--endpoint http://127.0.0.1:8000 --model TandemLLM`. Add `--tandem-raw` for `X-Tandem: raw`, or omit it to measure the configured default conductor path. Record which path you measured: injected packages, effective effort and monitoring can differ. Raw does not mean all caches or speculative decoding are disabled.
+
+The original PR used an extra local proxy to add this header. New direct-header probes avoid that hop, so do not call them transport-identical replays. The probe records `tandem_raw` in new receipt settings; old receipts remain unchanged. Keep concurrency within health's confirmed slot count/window capacities, not queue depth. The stock v0.12.0 launcher and our local four-slot adaptation differ; see [the recipe](TANDEM.md) and [service inspection](SPARK-TANDEM.md).
+
+For the independent **C1** cells only, the docs derive net decode as `sum(completion_tokens) / sum(wall_s - ttft_s)` from each receipt. This is separate from the probe's aggregate. All errors, cap hits and missing final answers remain visible; no capped or slow requests are dropped to improve a headline. See [Niklas's tables and limits](RECOMMENDED-RECIPES.md).

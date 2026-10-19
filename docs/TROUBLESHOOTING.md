@@ -1,5 +1,7 @@
 # Troubleshooting
 
+This page covers the **legacy TensorFold Docker recipe and experimental cuda24 profile**. For the primary serving route, use [the Tandem guide](TANDEM.md), including setup/rollback, raw/conductor and rendered-launcher checks.
+
 ## Build fails with an architecture or CUDA-version error
 
 Build the Spark profile on Linux aarch64 with `--platform linux/arm64`; use `--platform linux/amd64` on the experimental discrete-GPU path. The pinned NVIDIA image index selects fixed child manifests for those two architectures, not a moving tag. Do not substitute another base and retain this recipe's qualification label. An NGC access or network error is a download blocker, not a model failure.

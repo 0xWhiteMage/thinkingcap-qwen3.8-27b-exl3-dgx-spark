@@ -1,6 +1,21 @@
 # Recipe verification
 
-## What was exercised
+## Tandem-first update: what was exercised
+
+The primary recommendation is now [TandemLLM](TANDEM.md). Its new [identity manifest](../manifests/tandem.json) pins v0.12.0's engine/installer/community entry/target; it is not a separately frozen full auxiliary-asset manifest.
+
+| Check | Result | Boundary |
+| --- | --- | --- |
+| Existing Spark source/profile/launcher/health inspection | Clean upstream v0.11.4 checkout; local rendered four-slot launcher, actual target symlink resolved | Not the stock v0.12.0 single-slot recipe |
+| Actual resident target shards | Both sizes and SHA-256 values match the historical target manifest | Does not establish every tokenizer/base/drafter file's equivalence |
+| Live raw and default-conductor requests, thinking off/on | Six final answers, zero errors/cap hits; raw injection zero, conductor packages present | Short diagnostics, not accuracy/throughput/concurrency qualification |
+| Pinned v0.12.0 installer dry run on GB10 | Exit 0; candidate directory absent afterwards; existing engine retained | No real v0.12.0 installation, load, cold start or benchmark rerun |
+| Niklas's PR #1 receipts | All 11 JSONs retained unchanged; SHA-256 values match his declarations | Independent contributor evidence, not a maintainer rerun |
+| Probe raw-header regression | CLI transport test passes; no proxy needed for new raw requests | Test response is a fixture, not model evidence |
+
+See [the sanitised inspection record](../evidence/tandem-inspection.json), [actual service analysis](SPARK-TANDEM.md) and [independent receipt index](receipts/README.md). Private reasoning is not included in the new inspection record. The existing service was not stopped, restarted, upgraded or switched for this documentation update. Recommending Tandem does not establish that it outperforms TensorFold on every workload.
+
+## Historical TensorFold: what was exercised
 
 | Check | Result | Boundary |
 | --- | --- | --- |
@@ -17,7 +32,7 @@
 | Local regression tests and byte compilation | Passed | Test fixtures are unit-test data, not model results |
 | Original ThinkingCap licence bundle | Exact pinned bytes retained and regression-tested | Covers the reused release materials as well as model notices |
 
-The smoke requests used the existing resident qualified runtime. **It was not stopped, replaced or restarted, and a second model was not loaded.** A replacement-image cold start and full benchmark rerun were not performed in this publication pass. Reproduce the recipe on an idle Spark before using it for a production deployment or comparing performance claims.
+The historical smoke requests used the then-resident qualified **TensorFold** runtime. **It was not stopped, replaced or restarted, and a second model was not loaded.** A replacement-image cold start and full benchmark rerun were not performed in that publication pass. These historical build/source-comparison results do not qualify Tandem. Reproduce the appropriate recipe on an idle Spark before a production deployment or performance comparison.
 
 ## Evidence files
 

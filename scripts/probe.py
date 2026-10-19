@@ -49,7 +49,7 @@ def parse_stream(lines):
             'usage': usage, 'finish_reason': finish, 'stream_first_text_s': first}
 
 
-def request(endpoint, model, prompt, max_tokens, thinking, greedy, draft=None):
+def request(endpoint, model, prompt, max_tokens, thinking, greedy, draft=None, tandem_raw=False):
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}],
                'stream': True, 'stream_options': {'include_usage': True},
                'max_tokens': max_tokens, 'temperature': 0.0 if greedy else 1.0,
@@ -58,6 +58,8 @@ def request(endpoint, model, prompt, max_tokens, thinking, greedy, draft=None):
     if draft is not None:
         payload['draft'] = draft
     headers = {'Content-Type': 'application/json'}
+    if tandem_raw:
+        headers['X-Tandem'] = 'raw'
     if os.environ.get('RECIPE_API_KEY'):
         headers['Authorization'] = 'Bearer ' + os.environ['RECIPE_API_KEY']
     started = time.perf_counter()
@@ -84,6 +86,8 @@ def main():
     parser.add_argument('--greedy', action='store_true')
     parser.add_argument('--no-draft', action='store_true',
                         help='send draft=false to disable request-level prefix retention')
+    parser.add_argument('--tandem-raw', action='store_true',
+                        help='send X-Tandem: raw to bypass Tandem conductor for engine-only probes')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if not (1 <= args.concurrency <= 16 and args.requests >= args.concurrency and args.max_tokens > 0):
@@ -96,7 +100,8 @@ def main():
         entry = prompts[index % len(prompts)]
         try:
             data = request(args.endpoint, args.model, entry['prompt'], args.max_tokens,
-                           args.thinking == 'on', args.greedy, False if args.no_draft else None)
+                           args.thinking == 'on', args.greedy, False if args.no_draft else None,
+                           tandem_raw=args.tandem_raw)
             return {'index': index, 'id': entry['id'], 'status': 'ok', **data}
         except (OSError, ValueError, KeyError) as error:
             return {'index': index, 'id': entry['id'], 'status': 'error', 'error': str(error)}

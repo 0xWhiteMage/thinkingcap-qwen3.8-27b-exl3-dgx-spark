@@ -1,0 +1,32 @@
+{
+  "schema": "tandem-recipe-v1",
+  "engine": {
+    "repo": "https://github.com/0xBakeer/TandemLLM.git",
+    "version": "v0.12.0",
+    "revision": "f1abbbcf3c4c8e2de6c7d27062ef5b44ca075caf",
+    "license": "AGPL-3.0"
+  },
+  "installer": {
+    "path": "install.sh",
+    "sha256": "8907b0ba5786e137be7b2d0628d2141d53f2e55da2ee6b1ddbb1cd0500aaa4f8"
+  },
+  "profile": {
+    "id": "community/thinkingcap-27b-kearuga-exl3-4.00",
+    "path": "models/qwen3.8-27b/community/thinkingcap-27b-kearuga-exl3-4.00.json",
+    "sha256": "1c5e7016bf75ce164fc8b85934f03e6e9244d28ca9c21fa9489340303c81bd8f",
+    "drafters": "tandem-exl3"
+  },
+  "target": {
+    "repo": "0xWhiteMage/ThinkingCap-Qwen3.8-27B-Kearuga-EXL3-4.00bpw",
+    "revision": "11447639033dd80a4c04536b5b37ed7d642802ee"
+  },
+  "verification": {
+    "fresh_install_and_cold_start_repeated_here": false,
+    "installer_dry_run_on_gb10": true,
+    "resident_smoke_engine_revision": "760136f7a18fe33bf0a5fa2439793ba313686379",
+    "resident_smoke_version": "v0.11.4",
+    "independent_receipt_pr": "https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda/pull/1",
+    "independent_receipt_head": "031ebfda6b840f66dd6728f4b69ced5e5ea9dcc2",
+    "boundary": "Pins the engine, installer, profile entry and target revision. Auxiliary assets follow the pinned upstream registry and its HF checksum checks; this is not a separately frozen full asset manifest or a hermetic installation."
+  }
+}

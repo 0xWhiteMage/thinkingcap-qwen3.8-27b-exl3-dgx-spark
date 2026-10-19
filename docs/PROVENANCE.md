@@ -1,5 +1,15 @@
 # Source, patch and editorial provenance
 
+## Tandem-first serving recommendation
+
+The [new primary recipe](TANDEM.md) follows public `0xBakeer/TandemLLM` v0.12.0 at `f1abbbcf3c4c8e2de6c7d27062ef5b44ca075caf` and its explicit community ThinkingCap entry. Engine, installer/profile hashes and target HF revision `11447639033dd80a4c04536b5b37ed7d642802ee` are recorded in [manifests/tandem.json](../manifests/tandem.json). Auxiliary assets follow the pinned upstream registry/checksum workflow; this is not a separately frozen full asset manifest.
+
+The [resident-service inspection](SPARK-TANDEM.md) instead observed clean source v0.11.4, `760136f7a18fe33bf0a5fa2439793ba313686379`, an older stock-profile target symlink and a local rendered-launcher adaptation. Both actual target shard hashes match the legacy target manifest. Do not generalise that check into complete snapshot/runtime identity. The service was not upgraded or restarted.
+
+Independent receipts and the original report come from **Niklas Lenz** ([GitHub](https://github.com/Nipale-ai), [X](https://x.com/niklaslenz_ai), [website](https://niklaslenz.com)), [PR #1](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda/pull/1) head `031ebfda6b840f66dd6728f4b69ced5e5ea9dcc2`. The 11 JSON files are unchanged and their SHA-256 values match his declarations; [the index](receipts/README.md) distinguishes attached evidence from report-only summaries. His 5090 engine is ExLlamaV3 + MTP, not Tandem. His Spark Tandem measurement is the v0.12.0 raw path, not our resident/default-conductor configuration.
+
+The remainder of this document describes **legacy TensorFold** provenance, retained rather than overwritten.
+
 ## Immutable model inputs
 
 | Role | Repository | Revision |
