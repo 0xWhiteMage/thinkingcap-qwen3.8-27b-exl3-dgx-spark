@@ -11,7 +11,7 @@
 [![Format](https://img.shields.io/badge/EXL3-4.00_bpw-7854d8)](#the-stack)
 [![Runtime](https://img.shields.io/badge/TandemLLM-recommended-275cbd)](docs/TANDEM.md)
 [![Weights](https://img.shields.io/badge/Hugging_Face-weights-ffd21e)](https://huggingface.co/0xWhiteMage/ThinkingCap-Qwen3.8-27B-Kearuga-EXL3-4.00bpw)
-[![Tests](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda/actions/workflows/checks.yml/badge.svg)](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda/actions/workflows/checks.yml)
+[![Tests](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tandemllm/actions/workflows/checks.yml/badge.svg)](https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tandemllm/actions/workflows/checks.yml)
 [![Follow on X](https://img.shields.io/badge/X-@0xWhiteMage-000000?logo=x&logoColor=white)](https://x.com/0xWhiteMage)
 [![Donate on Ko-fi](https://img.shields.io/badge/Ko--fi-Donate-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/0xwhitemage)
 
@@ -21,7 +21,7 @@
 
 ---
 
-Serve **BottleCap AI's ThinkingCap-Qwen3.8-27B**, quantised as the **Kearuga EXL3 4.00bpw release**, through a local OpenAI-compatible endpoint. **TandemLLM is now the primary serving recommendation for DGX Spark / ASUS GX10 (GB10).** The older TensorFold Python CUDA recipe is retained for historical reproduction, not presented as the current default. The repository name remains unchanged so existing links keep working.
+Serve **BottleCap AI's ThinkingCap-Qwen3.8-27B**, quantised as the **Kearuga EXL3 4.00bpw release**, through a local OpenAI-compatible endpoint. **TandemLLM is now the primary serving recommendation for DGX Spark / ASUS GX10 (GB10).** The older TensorFold Python CUDA recipe is retained for historical reproduction, not presented as the current default. The repository is now named `thinkingcap-qwen3.8-27b-exl3-tandemllm`; the former `thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda` GitHub URL redirects here. Historical source references and receipts retain their original identities.
 
 > **Keep the stacks separate.** The independent desktop RTX 5090 **32 GB** results use **ExLlamaV3 + MTP**, not Tandem or TensorFold. The **24 GB** route remains experimental. Historical TensorFold throughput, fidelity and task results below have not been re-labelled as Tandem measurements.
 
@@ -148,8 +148,8 @@ Use the **[TandemLLM Spark recipe](docs/TANDEM.md)** for a new Spark setup. It i
 ### 1. Clone the recipe and inspect the pinned Tandem plan
 
 ```bash
-git clone https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda.git
-cd thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda
+git clone https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tandemllm.git
+cd thinkingcap-qwen3.8-27b-exl3-tandemllm
 git rev-parse HEAD
 TANDEM_COMMIT=f1abbbcf3c4c8e2de6c7d27062ef5b44ca075caf
 mkdir -p results

@@ -55,8 +55,8 @@ This quick start is for the **Spark profile**. For a 24 GB discrete NVIDIA GPU, 
 ### 1. Clone the recipe and install the download client
 
 ```bash
-git clone https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda.git
-cd thinkingcap-qwen3.8-27b-exl3-tensorfold-cuda
+git clone https://github.com/0xWhiteMage/thinkingcap-qwen3.8-27b-exl3-tandemllm.git
+cd thinkingcap-qwen3.8-27b-exl3-tandemllm
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install 'huggingface-hub==1.24.0'
